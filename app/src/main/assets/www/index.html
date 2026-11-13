@@ -91,6 +91,13 @@
             box-shadow: 0 0 18px rgba(52, 211, 153, 0.35);
             transform: translateY(-2px);
         }
+        #companion-name-tag {
+            position: absolute; z-index: 5; pointer-events: none; transform: translate(-50%, -100%);
+            padding: 1px 10px; border-radius: 999px; font-size: 11px; font-weight: 900; white-space: nowrap;
+            color: #fff; background: rgba(190, 24, 93, 0.78); border: 1px solid rgba(255,255,255,0.35);
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        }
+        .option-pill.active-comp { border-color: #f472b6; background: linear-gradient(135deg, rgba(236,72,153,0.35), rgba(131,24,67,0.5)); }
         /* Floating 3D Name Tag */
         #floating-name-tag {
             position: absolute;
@@ -178,6 +185,7 @@
     <div id="dhikr-toast"></div>
 
     <!-- Floating Player Nameplate Over Character Head -->
+    <div id="companion-name-tag" class="hidden"><span id="companion-tag-text">الصديقة</span></div>
     <div id="floating-name-tag" class="hidden">
         <div id="name-tag-pill" class="px-3 py-0.5 rounded-full text-xs sm:text-sm font-black tracking-wide flex items-center gap-1.5 border shadow-lg whitespace-nowrap">
             <span id="name-tag-icon">👦</span>
@@ -382,6 +390,21 @@
                         onkeydown="if (event.key === 'Enter') this.blur();"
                         class="w-full bg-slate-900/90 border-2 border-slate-600 focus:border-amber-400 rounded-xl px-3.5 py-2 text-white font-extrabold text-sm outline-none transition shadow-inner text-right pr-3.5"
                     >
+                </div>
+            </div>
+
+            <!-- Companion runner (runs behind the hero) -->
+            <div class="mb-3 text-right rounded-xl border border-pink-400/30 bg-slate-900/50 p-2.5">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                    <span class="text-xs font-bold text-slate-200"><span class="ml-1">🏃</span>الشخصية المرافقة (تجري خلفك)</span>
+                    <button type="button" id="btn-comp-toggle" onclick="toggleCompanion()" class="option-pill rounded-lg px-2.5 py-1 text-xs font-black bg-slate-800/70 cursor-pointer">مفعّلة</button>
+                </div>
+                <div id="comp-options" class="grid grid-cols-3 gap-2">
+                    <button type="button" id="btn-comp-male" onclick="selectCompanionGender('male')" class="option-pill rounded-lg px-2 py-1.5 text-xs font-black bg-slate-800/70 cursor-pointer">👦 ولد</button>
+                    <button type="button" id="btn-comp-female" onclick="selectCompanionGender('female')" class="option-pill rounded-lg px-2 py-1.5 text-xs font-black bg-slate-800/70 cursor-pointer">🧕 بنت</button>
+                    <input type="text" id="companion-name-input" maxlength="20" placeholder="اسم المرافق..." autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done"
+                        oninput="updateCompanionName(this.value)" onkeydown="if (event.key === 'Enter') this.blur();"
+                        class="col-span-3 sm:col-span-1 w-full bg-slate-900/90 border-2 border-slate-600 focus:border-pink-400 rounded-lg px-2.5 py-1.5 text-white font-extrabold text-xs outline-none text-right">
                 </div>
             </div>
 
@@ -754,6 +777,9 @@
             totalCoins: parseInt(safeGet(STORAGE_KEYS.TOTAL_COINS) || '40', 10), // Start with 40 bonus coins so user can test revive
             quality: safeGet(STORAGE_KEYS.QUALITY) || ((IS_MOBILE || IS_TV) ? 'medium' : 'high') // 'low' | 'medium' | 'high'
         };
+        playerState.companionEnabled = safeGet('subway_ar_comp_on') !== '0';
+        playerState.companionGender = safeGet('subway_ar_comp_gender') || 'female';
+        playerState.companionName = (safeGet('subway_ar_comp_name') || '').trim();
         (function initPlayerName() {
             const typed = loadSavedName();
             playerState.customName = !!typed;
@@ -2943,6 +2969,7 @@
             playerMesh.scale.setScalar(PLAYER_SCALE);
             playerMesh.visible = wasVisible;
             scene.add(playerMesh);
+            if (typeof rebuildCompanion === 'function') rebuildCompanion();
         }
 
         // ==========================================
@@ -3588,6 +3615,10 @@
 
             playerMesh.position.set(0, 0, 0);
             playerMesh.rotation.set(0, 0, 0);
+            lateral.x = 0; lateral.v = 0;
+            if (!companionMesh && playerState.companionEnabled) rebuildCompanion();
+            resetCompanion();
+            showCompanionTag(true);
             if (playerMesh.userData && playerMesh.userData.shieldMesh) {
                 playerMesh.userData.shieldMesh.visible = false;
             }
@@ -3599,7 +3630,7 @@
             document.getElementById('gameover-screen').classList.add('hidden');
             document.getElementById('pause-screen').classList.add('hidden');
             document.getElementById('hud-screen').classList.remove('hidden');
-            document.getElementById('floating-name-tag').classList.remove('hidden');
+            document.getElementById('floating-name-tag').classList.remove('hidden'); showCompanionTag(true);
             document.getElementById('level-up-banner').classList.add('hidden');
 
             updateUIWithPlayerState();
@@ -3658,7 +3689,7 @@
             document.getElementById('revive-screen').classList.add('hidden');
             document.getElementById('gameover-screen').classList.add('hidden');
             document.getElementById('hud-screen').classList.add('hidden');
-            document.getElementById('floating-name-tag').classList.add('hidden');
+            document.getElementById('floating-name-tag').classList.add('hidden'); showCompanionTag(false);
             document.getElementById('menu-screen').classList.remove('hidden');
             updateUIWithPlayerState();
             onWindowResize();
@@ -3778,7 +3809,7 @@
             runCoins = 0;
             localStorage.setItem(STORAGE_KEYS.TOTAL_COINS, String(playerState.totalCoins));
 
-            document.getElementById('floating-name-tag').classList.add('hidden');
+            document.getElementById('floating-name-tag').classList.add('hidden'); showCompanionTag(false);
             document.getElementById('hud-screen').classList.add('hidden');
             document.getElementById('gameover-screen').classList.remove('hidden');
 
@@ -3809,11 +3840,151 @@
             tagEl.style.top = `${y}px`;
         }
 
+
+        // ==========================================
+        // COMPANION RUNNER: follows the hero's exact path with a delay, so it clears the same obstacles
+        // ==========================================
+        let companionMesh = null, companionShadow = null;
+        let gameClock = 0;
+        const pathHistory = [];                 // { t, x, y, roll }
+        const compState = { x: 0, vx: 0, phase: 0, side: -0.85 };
+        function companionDisplayName() {
+            return playerState.companionName || (playerState.companionGender === 'female' ? 'الصديقة' : 'الصديق');
+        }
+        function companionZ() { return 1.9; }
+
+        function rebuildCompanion() {
+            if (!scene) return;
+            if (companionMesh) { scene.remove(companionMesh); companionMesh = null; }
+            if (companionShadow) { scene.remove(companionShadow); companionShadow = null; }
+            if (!playerState.companionEnabled) return;
+            const theme = (playerState.outfitTheme + 2) % 4;
+            companionMesh = linearizeObject(createCharacterMesh(playerState.companionGender, theme, playerState.artStyle));
+            const cast = Q().shadows;
+            companionMesh.traverse(o => { if (o.isMesh && o !== companionMesh.userData.shieldMesh) o.castShadow = cast; });
+            companionMesh.scale.setScalar(PLAYER_SCALE * 0.9);
+            companionMesh.position.set(0, 0, companionZ());
+            companionMesh.visible = !!(gameActive || (playerMesh && playerMesh.visible));
+            scene.add(companionMesh);
+            companionShadow = new THREE.Mesh(contactShadow.geometry, contactShadow.material);
+            companionShadow.rotation.x = -Math.PI / 2;
+            companionShadow.renderOrder = 2;
+            scene.add(companionShadow);
+        }
+
+        function resetCompanion() {
+            pathHistory.length = 0;
+            gameClock = 0;
+            compState.x = -0.85; compState.vx = 0; compState.side = -0.85;
+            if (companionMesh) { companionMesh.position.set(0, 0, companionZ()); companionMesh.rotation.set(0, 0, 0); }
+        }
+
+        function samplePath(t) {
+            if (!pathHistory.length) return { x: 0, y: 0, roll: false };
+            if (t <= pathHistory[0].t) return pathHistory[0];
+            for (let i = pathHistory.length - 1; i > 0; i--) {
+                const a = pathHistory[i - 1], b = pathHistory[i];
+                if (a.t <= t) {
+                    const k = (t - a.t) / Math.max(1e-4, b.t - a.t);
+                    return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, roll: k < 0.5 ? a.roll : b.roll };
+                }
+            }
+            return pathHistory[pathHistory.length - 1];
+        }
+
+        function updateCompanion(dt, now, speedT) {
+            if (!companionMesh) return;
+            gameClock += dt;
+            pathHistory.push({ t: gameClock, x: playerMesh.position.x, y: playerMesh.position.y, roll: isRolling });
+            while (pathHistory.length > 2 && pathHistory[0].t < gameClock - 3) pathHistory.shift();
+
+            const z = companionZ();
+            const delay = z / Math.max(8, gameSpeed);            // obstacles reach the companion exactly this much later
+            const st = samplePath(gameClock - delay);
+            // Run slightly beside the hero's path, on the side facing the middle of the track
+            const wantSide = st.x > 0.5 ? -0.85 : (st.x < -0.5 ? 0.85 : (compState.side || -0.85));
+            compState.side += (wantSide - compState.side) * Math.min(1, dt * 4);
+            const prevX = compState.x;
+            compState.x = st.x + compState.side;
+            const vx = (compState.x - prevX) / Math.max(1e-3, dt);
+            compState.vx += (vx - compState.vx) * Math.min(1, dt * 10);
+
+            const ud = companionMesh.userData;
+            companionMesh.visible = true;
+            companionMesh.position.set(compState.x, st.y, z);
+            companionMesh.rotation.z = THREE.MathUtils.clamp(-compState.vx * 0.03, -0.32, 0.32);
+            companionMesh.rotation.y = THREE.MathUtils.clamp(-compState.vx * 0.02, -0.25, 0.25);
+            updateCharacterFace(companionMesh, dt, now);
+
+            compState.phase += dt * Math.PI * 2 * (1.32 + gameSpeed * 0.024);
+            if (st.roll) {
+                ud.hipsGroup.position.y += ((ud.baseHipY || 1.05) * 0.55 - ud.hipsGroup.position.y) * Math.min(1, dt * 16);
+                ud.bodyGroup.rotation.x += (0.9 - ud.bodyGroup.rotation.x) * Math.min(1, dt * 16);
+                ud.leftLeg.rotation.x = 1.2; ud.leftKnee.rotation.x = -1.6; ud.rightLeg.rotation.x = 0.85; ud.rightKnee.rotation.x = -1.3;
+            } else if (st.y > 0.08) {
+                ud.hipsGroup.position.y += ((ud.baseHipY || 1.05) - ud.hipsGroup.position.y) * Math.min(1, dt * 14);
+                ud.bodyGroup.rotation.x += (0.18 - ud.bodyGroup.rotation.x) * Math.min(1, dt * 12);
+                ud.leftArm.rotation.x = 1.9; ud.rightArm.rotation.x = 1.6;
+                ud.leftLeg.rotation.x = 1.0; ud.leftKnee.rotation.x = -1.2; ud.rightLeg.rotation.x = -0.4; ud.rightKnee.rotation.x = -0.7;
+            } else {
+                applyRunPose(ud, compState.phase, Math.min(1, dt * 16), speedT);
+            }
+            if (companionShadow) {
+                const k = THREE.MathUtils.clamp(1 - st.y / 5, 0.35, 1) * PLAYER_SCALE * 0.92;
+                companionShadow.visible = true;
+                companionShadow.position.set(compState.x, playerState.mapType === 'railway' ? 0.11 : 0.03, z);
+                companionShadow.scale.set(k, k, 1);
+            }
+            // Name tag
+            const tag = document.getElementById('companion-name-tag');
+            tempProjVec.set(compState.x, st.y + (st.roll ? 1.45 : 2.75) * PLAYER_SCALE * 0.92, z).project(camera);
+            if (tempProjVec.z < 1) {
+                tag.style.left = `${(tempProjVec.x * 0.5 + 0.5) * window.innerWidth}px`;
+                tag.style.top = `${(-tempProjVec.y * 0.5 + 0.5) * window.innerHeight}px`;
+            }
+        }
+
+        function showCompanionTag(show) {
+            const tag = document.getElementById('companion-name-tag');
+            if (!tag) return;
+            document.getElementById('companion-tag-text').textContent = companionDisplayName();
+            tag.classList.toggle('hidden', !(show && playerState.companionEnabled));
+        }
+
+        function refreshCompanionUI() {
+            const tb = document.getElementById('btn-comp-toggle');
+            if (!tb) return;
+            tb.textContent = playerState.companionEnabled ? 'مفعّلة' : 'متوقفة';
+            tb.classList.toggle('active-comp', playerState.companionEnabled);
+            document.getElementById('comp-options').style.opacity = playerState.companionEnabled ? '1' : '0.4';
+            document.getElementById('btn-comp-male').classList.toggle('active-comp', playerState.companionGender === 'male');
+            document.getElementById('btn-comp-female').classList.toggle('active-comp', playerState.companionGender === 'female');
+            const ni = document.getElementById('companion-name-input');
+            if (ni && document.activeElement !== ni) ni.value = playerState.companionName;
+        }
+        function toggleCompanion() {
+            playerState.companionEnabled = !playerState.companionEnabled;
+            safeSet('subway_ar_comp_on', playerState.companionEnabled ? '1' : '0');
+            rebuildCompanion(); refreshCompanionUI(); playSound('lane');
+        }
+        function selectCompanionGender(g) {
+            playerState.companionGender = g;
+            safeSet('subway_ar_comp_gender', g);
+            if (!playerState.companionEnabled) { playerState.companionEnabled = true; safeSet('subway_ar_comp_on', '1'); }
+            rebuildCompanion(); refreshCompanionUI(); playSound('lane');
+        }
+        function updateCompanionName(v) {
+            playerState.companionName = (v || '').replace(/\s+/g, ' ').trim().slice(0, 20);
+            safeSet('subway_ar_comp_name', playerState.companionName);
+            document.getElementById('companion-tag-text').textContent = companionDisplayName();
+        }
+
         // ==========================================
         // 10. ANIMATION & GAME LOOP
         // ==========================================
         let lastTime = performance.now();
         let runPhaseAcc = 0;
+        const lateral = { x: 0, v: 0, bank: 0 };
 
         // Biomechanical run cycle. phase = left-leg phase (right leg is phase + PI).
         // Limb rotation.x > 0 swings forward; knee rotation.x < 0 bends; shoe rotation.x > 0 lifts the toes.
@@ -3949,6 +4120,8 @@
                 scrollWorld(7 * dt);
                 if (playerMesh) playerMesh.visible = false;
                 if (contactShadow) contactShadow.visible = false;
+                if (companionMesh) companionMesh.visible = false;
+                if (companionShadow) companionShadow.visible = false;
                 camera.position.lerp(_camLook.set(Math.sin(now * 0.00015) * 2.2, CAM_HEIGHT, CAM_DIST), Math.min(1, dt * 1.5));
                 camera.fov = baseFov(); camera.updateProjectionMatrix();
                 camera.lookAt(0, CAM_LOOK_Y + 0.6, CAM_LOOK_Z);
@@ -4004,11 +4177,19 @@
                     }
                 }
 
-                // Lane switching with body banking
-                playerMesh.position.x += (targetX - playerMesh.position.x) * (1 - Math.exp(-dt * 30));
-                const dx = targetX - playerMesh.position.x;
-                playerMesh.rotation.z = -dx * 0.14;
-                playerMesh.rotation.y = -dx * 0.12;
+                // Lane switching: critically damped spring (fast but silky), body leans into the turn by velocity
+                const SPRING = 260, DAMP = 2 * Math.sqrt(SPRING);
+                const sub = Math.max(1, Math.ceil(dt / 0.008));
+                for (let i = 0; i < sub; i++) {
+                    const h = dt / sub;
+                    lateral.v += (SPRING * (targetX - lateral.x) - DAMP * lateral.v) * h;
+                    lateral.x += lateral.v * h;
+                }
+                playerMesh.position.x = lateral.x;
+                const dx = targetX - lateral.x;
+                lateral.bank += (THREE.MathUtils.clamp(-lateral.v * 0.032, -0.34, 0.34) - lateral.bank) * Math.min(1, dt * 14);
+                playerMesh.rotation.z = lateral.bank;
+                playerMesh.rotation.y = lateral.bank * 0.7;
 
                 if (jumpBufferTimer > 0) jumpBufferTimer -= dt;
 
@@ -4204,13 +4385,14 @@
                 camShake = Math.max(0, camShake - dt * 1.6);
                 const sx = (Math.random() - 0.5) * camShake, sy = (Math.random() - 0.5) * camShake;
                 const bob = (isJumping || isRolling) ? 0 : Math.abs(Math.sin(runPhase)) * 0.05;
-                camBase.x = THREE.MathUtils.lerp(camBase.x, playerMesh.position.x * 0.45 + camAngleOffsetX, Math.min(1, dt * 8));
+                camBase.x = THREE.MathUtils.lerp(camBase.x, playerMesh.position.x * 0.45 + camAngleOffsetX, Math.min(1, dt * 5));
                 // Camera rises with jumps (so the runner never balloons toward the lens) and dips slightly on rolls
                 camBase.y = THREE.MathUtils.lerp(camBase.y, CAM_HEIGHT + playerMesh.position.y * 0.55 + camAngleOffsetY - (isRolling ? 0.35 : 0), Math.min(1, dt * 7));
                 camBase.z = THREE.MathUtils.lerp(camBase.z, CAM_DIST + speedT * 0.6, Math.min(1, dt * 2));
                 camera.position.set(camBase.x + sx, camBase.y + sy + bob, camBase.z);
                 camera.lookAt(playerMesh.position.x * 0.35 + sx * 0.5, CAM_LOOK_Y + playerMesh.position.y * 0.35, CAM_LOOK_Z);
 
+                updateCompanion(dt, now, speedT);
                 updateWeather(dt, gameSpeed, now);
                 updateFloatingNameplate();
             } else if (!menuOpen && scene) {
@@ -4481,7 +4663,7 @@
         function tvFocus(el) {
             if (!el) return;
             el.focus({ preventScroll: true });
-            el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+            el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
         }
         function tvFocusFirst() {
             const scope = tvActiveOverlay();
@@ -4490,6 +4672,21 @@
             const primary = items.find(el => /startGame|togglePause|clearNearby|revive/i.test(el.getAttribute('onclick') || '')) || items[0];
             tvFocus(primary);
         }
+        // Row-based navigation: controls are grouped into visual rows (top to bottom).
+        // Up/Down = previous/next row (closest control horizontally), Left/Right = neighbour in the same row.
+        function tvRows(items) {
+            const withRect = items.map(el => ({ el, r: el.getBoundingClientRect() }))
+                .sort((a, b) => (a.r.top + a.r.height / 2) - (b.r.top + b.r.height / 2));
+            const rows = [];
+            for (const it of withRect) {
+                const cy = it.r.top + it.r.height / 2;
+                const row = rows.find(rw => Math.abs(rw.cy - cy) < Math.max(14, Math.min(rw.h, it.r.height) * 0.5));
+                if (row) { row.items.push(it); } else rows.push({ cy, h: it.r.height, items: [it] });
+            }
+            rows.sort((a, b) => a.cy - b.cy);
+            rows.forEach(rw => rw.items.sort((a, b) => (a.r.left + a.r.width / 2) - (b.r.left + b.r.width / 2)));
+            return rows;
+        }
         function tvMove(dir) {
             const scope = tvActiveOverlay();
             if (!scope) return;
@@ -4497,24 +4694,28 @@
             if (!items.length) return;
             const cur = document.activeElement;
             if (!items.includes(cur)) { tvFocusFirst(); return; }
-            const a = cur.getBoundingClientRect();
-            const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
-            let best = null, bestScore = Infinity;
-            for (const el of items) {
-                if (el === cur) continue;
-                const b = el.getBoundingClientRect();
-                const bx = b.left + b.width / 2, by = b.top + b.height / 2;
-                const dx = bx - ax, dy = by - ay;
-                let main, cross;
-                if (dir === 'up') { main = -dy; cross = Math.abs(dx); }
-                else if (dir === 'down') { main = dy; cross = Math.abs(dx); }
-                else if (dir === 'left') { main = -dx; cross = Math.abs(dy); }
-                else { main = dx; cross = Math.abs(dy); }
-                if (main <= 2) continue;
-                const score = main + cross * 2.2;
-                if (score < bestScore) { bestScore = score; best = el; }
+            const rows = tvRows(items);
+            const ri = rows.findIndex(rw => rw.items.some(it => it.el === cur));
+            const row = rows[ri];
+            const ci = row.items.findIndex(it => it.el === cur);
+            const cx = row.items[ci].r.left + row.items[ci].r.width / 2;
+            let target = null;
+            if (dir === 'left' || dir === 'right') {
+                // RTL page: visual left/right map directly to screen positions
+                const ni = ci + (dir === 'right' ? 1 : -1);
+                if (ni >= 0 && ni < row.items.length) target = row.items[ni].el;
+            } else {
+                const nr = rows[ri + (dir === 'down' ? 1 : -1)];
+                if (nr) {
+                    let best = null, bd = Infinity;
+                    for (const it of nr.items) {
+                        const d = Math.abs(it.r.left + it.r.width / 2 - cx);
+                        if (d < bd) { bd = d; best = it.el; }
+                    }
+                    target = best;
+                }
             }
-            if (best) tvFocus(best);
+            if (target) tvFocus(target);
         }
 
         function initTVMode() {
@@ -4566,6 +4767,7 @@
             if (!IS_ANDROID_APP) initPWASupport();
             refreshSoundIcons();
             refreshDhikrButton();
+            refreshCompanionUI();
             updateUIWithPlayerState();
             initPreviewScene();
             initMainScene();
