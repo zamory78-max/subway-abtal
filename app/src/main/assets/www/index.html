@@ -129,6 +129,8 @@
             transition: opacity 0.7s ease-out;
         }
         #hit-flash.on { opacity: 1; transition: none; }
+        #game-canvas { touch-action: none; }
+        body { -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
         /* Respect phone notches / rounded corners */
         #hud-screen { padding-top: max(0.75rem, env(safe-area-inset-top)); padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
         #level-up-banner { top: calc(max(0.75rem, env(safe-area-inset-top)) + 3.2rem); z-index: 11; }
@@ -344,15 +346,17 @@
                     <input 
                         type="text" 
                         id="player-name-input" 
-                        maxlength="18"
-                        value="البطل"
-                        placeholder="اكتب اسم بطلك هنا..." 
+                        maxlength="20"
+                        value=""
+                        placeholder="اكتب اسمك هنا..." 
+                        autocomplete="off"
+                        autocorrect="off"
+                        spellcheck="false"
+                        enterkeyhint="done"
                         oninput="updateCharacterName(this.value)"
-                        class="w-full bg-slate-900/90 border-2 border-slate-600 focus:border-amber-400 rounded-xl px-3.5 py-2 text-white font-extrabold text-sm outline-none transition shadow-inner text-right pr-3.5 pl-10"
+                        onkeydown="if (event.key === 'Enter') this.blur();"
+                        class="w-full bg-slate-900/90 border-2 border-slate-600 focus:border-amber-400 rounded-xl px-3.5 py-2 text-white font-extrabold text-sm outline-none transition shadow-inner text-right pr-3.5"
                     >
-                    <button onclick="setRandomArabicName()" title="اسم عشوائي" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-400 transition p-1">
-                        <i class="fa-solid fa-dice text-base"></i>
-                    </button>
                 </div>
             </div>
 
@@ -694,9 +698,15 @@
 
         function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
         function safeSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+        function loadSavedName() {
+            const saved = (safeGet('subway_ar_player_name') || '').trim();
+            const presets = ['البطل', 'الأميرة', 'البطلة', 'ريان', 'يامن', 'آدم', 'فارس', 'حمزة', 'عمر', 'زيد', 'نور', 'ليلى', 'سارة', 'ياسمين', 'مريم', 'جنى', 'لينا'];
+            return presets.includes(saved) ? '' : saved;
+        }
 
         let playerState = {
-            name: safeGet(STORAGE_KEYS.NAME) || 'البطل',
+            name: 'البطل',
+            customName: false,
             gender: safeGet(STORAGE_KEYS.GENDER) || 'male', // 'male' | 'female'
             artStyle: safeGet(STORAGE_KEYS.STYLE) || 'realistic', // 'cartoon' | 'realistic'
             mapType: safeGet(STORAGE_KEYS.MAP) || 'railway', // 'railway' | 'city' | 'forest'
@@ -705,6 +715,11 @@
             totalCoins: parseInt(safeGet(STORAGE_KEYS.TOTAL_COINS) || '40', 10), // Start with 40 bonus coins so user can test revive
             quality: safeGet(STORAGE_KEYS.QUALITY) || (IS_MOBILE ? 'medium' : 'high') // 'low' | 'medium' | 'high'
         };
+        (function initPlayerName() {
+            const typed = loadSavedName();
+            playerState.customName = !!typed;
+            playerState.name = typed || (playerState.gender === 'female' ? 'البطلة' : 'البطل');
+        })();
 
         // Each map has its own time of day: golden-hour railway, rainy night city, misty daylight forest
         const MAP_CONFIGS = {
@@ -3140,8 +3155,10 @@
             let touchStartY = 0;
             let isTouchActive = false;
             let lastSwipeTime = 0;
-            const SWIPE_THRESHOLD = 14; // Very low pixel distance for instant mobile reaction
-            const SWIPE_COOLDOWN_MS = 95; // Allows chaining fast swipes (e.g., lane change -> jump) without lifting finger
+            let swipeCount = 0;
+            const SWIPE_THRESHOLD = 16;        // first move fires after 16px of finger travel (instant)
+            const CHAIN_THRESHOLD = 55;        // a second move in the same touch needs a clear new swipe
+            const SWIPE_COOLDOWN_MS = 120;
 
             const canvas = document.getElementById('game-canvas');
 
@@ -3150,6 +3167,8 @@
                     touchStartX = e.touches[0].clientX;
                     touchStartY = e.touches[0].clientY;
                     isTouchActive = true;
+                    swipeCount = 0;
+                    if (gameActive && !gamePaused) e.preventDefault();
                 }
             }, { passive: false });
 
@@ -3167,7 +3186,9 @@
                 const dx = currentX - touchStartX;
                 const dy = currentY - touchStartY;
 
-                if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return;
+                const need = swipeCount === 0 ? SWIPE_THRESHOLD : CHAIN_THRESHOLD;
+                if (Math.abs(dx) < need && Math.abs(dy) < need) return;
+                swipeCount++;
 
                 if (Math.abs(dx) > Math.abs(dy)) {
                     if (dx > 0) handleAction('right');
@@ -3267,8 +3288,8 @@
 
         function updateUIWithPlayerState() {
             const nameInput = document.getElementById('player-name-input');
-            if (nameInput && nameInput.value !== playerState.name) {
-                nameInput.value = playerState.name;
+            if (nameInput && document.activeElement !== nameInput) {
+                nameInput.value = playerState.customName ? playerState.name : '';
             }
 
             // Highlight selected outfit theme circle
@@ -3350,11 +3371,17 @@
             document.getElementById('menu-total-coins').textContent = playerState.totalCoins;
         }
 
+        // The player types any name they like; an empty box simply shows a neutral default in the game
+        function defaultPlayerName() { return playerState.gender === 'female' ? 'البطلة' : 'البطل'; }
         function updateCharacterName(val) {
-            const clean = val.trim() || (playerState.gender === 'female' ? 'الأميرة' : 'البطل');
-            playerState.name = clean;
-            localStorage.setItem(STORAGE_KEYS.NAME, clean);
-            updateUIWithPlayerState();
+            const typed = (val || '').replace(/\s+/g, ' ').trim().slice(0, 20);
+            playerState.name = typed || defaultPlayerName();
+            playerState.customName = !!typed;
+            safeSet(STORAGE_KEYS.NAME, typed);
+            const hudName = document.getElementById('hud-player-name');
+            if (hudName) hudName.textContent = playerState.name;
+            const tag = document.getElementById('name-tag-text');
+            if (tag) tag.textContent = playerState.name;
         }
 
         function setRandomArabicName() {
@@ -3369,17 +3396,8 @@
             playerState.gender = gender;
             localStorage.setItem(STORAGE_KEYS.GENDER, gender);
 
-            // If default name wasn't customized, switch default nicely
-            const currentInput = document.getElementById('player-name-input').value.trim();
-            if (gender === 'female' && currentInput === 'البطل') {
-                document.getElementById('player-name-input').value = 'الأميرة';
-                playerState.name = 'الأميرة';
-                localStorage.setItem(STORAGE_KEYS.NAME, 'الأميرة');
-            } else if (gender === 'male' && currentInput === 'الأميرة') {
-                document.getElementById('player-name-input').value = 'البطل';
-                playerState.name = 'البطل';
-                localStorage.setItem(STORAGE_KEYS.NAME, 'البطل');
-            }
+            // Only the default name follows the gender; a name the player typed is never changed
+            if (!playerState.customName) playerState.name = defaultPlayerName();
 
             updateUIWithPlayerState();
             rebuildPreviewCharacter();
@@ -3678,12 +3696,37 @@
             }
         }
 
+        // Measures real frame rate while playing; lowers resolution, then shadows, if the phone struggles
+        const perfMon = { frames: 0, time: 0, steps: 0 };
+        function monitorPerformance(dt) {
+            if (!gameActive || gamePaused || perfMon.steps >= 2) return;
+            perfMon.frames++; perfMon.time += dt;
+            if (perfMon.time < 3) return;
+            const fps = perfMon.frames / perfMon.time;
+            perfMon.frames = 0; perfMon.time = 0;
+            if (fps >= 48) return;
+            perfMon.steps++;
+            if (renderer.getPixelRatio() > 1) {
+                renderer.setPixelRatio(1);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            } else if (renderer.shadowMap.enabled) {
+                renderer.shadowMap.enabled = false;
+                sunLight.castShadow = false;
+                scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); });
+                sharedMaterialList.forEach(m => { m.needsUpdate = true; });
+                if (weatherSystem) weatherSystem.obj.visible = false;
+                playerState.quality = 'low';
+                safeSet(STORAGE_KEYS.QUALITY, 'low');
+            }
+        }
+
         function animate() {
             requestAnimationFrame(animate);
 
             const now = performance.now();
             const dt = Math.min((now - lastTime) / 1000, 0.1);
             lastTime = now;
+            monitorPerformance(dt);
             const menuOpen = !el('menu-screen').classList.contains('hidden');
 
             // 1. Animate Preview Character (Idle breathing + friendly wave + turntable)
@@ -3768,7 +3811,7 @@
                 }
 
                 // Lane switching with body banking
-                playerMesh.position.x = THREE.MathUtils.lerp(playerMesh.position.x, targetX, Math.min(1, dt * 22));
+                playerMesh.position.x += (targetX - playerMesh.position.x) * (1 - Math.exp(-dt * 30));
                 const dx = targetX - playerMesh.position.x;
                 playerMesh.rotation.z = -dx * 0.14;
                 playerMesh.rotation.y = -dx * 0.12;
