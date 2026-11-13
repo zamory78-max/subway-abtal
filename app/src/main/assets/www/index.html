@@ -770,7 +770,7 @@
                 sunColor: 0xffd6a3, sunIntensity: 2.0, sunPos: [14, 18, 16],
                 hemiSky: 0xbdd3f0, hemiGround: 0x6b5238, hemiIntensity: 0.35,
                 exposure: 1.0,
-                skySunDir: [-0.35, 0.1, -1], skySunColor: 0xffc27a, skySunSize: 1.0, stars: 0,
+                skySunDir: [-0.35, 0.1, -1], skySunColor: 0xffc27a, skySunSize: 1.0, stars: 0, clouds: 0.75, cloudColor: 0xffd9b8,
                 envGround: 0x5a4a3a
             },
             city: {
@@ -778,10 +778,10 @@
                 icon: 'fa-solid fa-city',
                 skyTop: 0x050b1c, skyHorizon: 0x26315a, skyBottom: 0x0a0d18,
                 fogNear: 24, fogFar: 140,
-                sunColor: 0xa9bcff, sunIntensity: 0.55, sunPos: [-12, 26, 14],
-                hemiSky: 0x4a5a8a, hemiGround: 0x1a1a22, hemiIntensity: 0.45,
-                exposure: 1.3,
-                skySunDir: [0.3, 0.32, -1], skySunColor: 0xdfe8ff, skySunSize: 0.6, stars: 1.0,
+                sunColor: 0xb9c8ff, sunIntensity: 0.9, sunPos: [-12, 26, 14],
+                hemiSky: 0x6a7bb0, hemiGround: 0x2a2a35, hemiIntensity: 0.75,
+                exposure: 1.6,
+                skySunDir: [0.3, 0.32, -1], skySunColor: 0xdfe8ff, skySunSize: 0.6, stars: 1.0, clouds: 0.55, cloudColor: 0x2a3150,
                 envGround: 0x111318, rain: true
             },
             forest: {
@@ -792,7 +792,7 @@
                 sunColor: 0xfff0d0, sunIntensity: 2.2, sunPos: [10, 30, 12],
                 hemiSky: 0xd2e8ff, hemiGround: 0x3a5226, hemiIntensity: 0.4,
                 exposure: 1.0,
-                skySunDir: [0.4, 0.45, -1], skySunColor: 0xfff4dd, skySunSize: 0.8, stars: 0,
+                skySunDir: [0.4, 0.45, -1], skySunColor: 0xfff4dd, skySunSize: 0.8, stars: 0, clouds: 0.7, cloudColor: 0xffffff,
                 envGround: 0x2f4a24, pollen: true
             }
         };
@@ -1779,6 +1779,27 @@
         };
         function Q() { return QUALITY_PRESETS[playerState.quality] || QUALITY_PRESETS.medium; }
 
+        // "Curved world": everything bends gently downward with distance, so the road seems to roll
+        // toward the runner from over the horizon instead of lying flat. Shadow-depth passes are not bent.
+        const WORLD_CURVE = 0.0011;
+        (function patchWorldCurve() {
+            const bend = `
+#ifndef DEPTH_PACKING
+    mvPosition.y -= ${WORLD_CURVE.toFixed(5)} * mvPosition.z * mvPosition.z;
+#endif
+`;
+            const key = 'gl_Position = projectionMatrix * mvPosition;';
+            THREE.ShaderChunk.project_vertex = THREE.ShaderChunk.project_vertex.replace(key, bend + key);
+            THREE.ShaderLib.sprite.vertexShader = THREE.ShaderLib.sprite.vertexShader.replace(key, bend + key);
+        })();
+        // Camera framing: wider view on tall phone screens so the road ahead dominates, not the runner
+        const CAM_HEIGHT = 4.9, CAM_DIST = 8.8, CAM_LOOK_Y = 1.2, CAM_LOOK_Z = -20;
+        function baseFov() {
+            const a = window.innerWidth / Math.max(1, window.innerHeight);
+            return a < 0.8 ? 72 : (a < 1.3 ? 64 : 55);
+        }
+        const PLAYER_SCALE = 0.76;
+
         // Colors in this file are authored in sRGB; the renderer works in linear space (sRGB output + ACES tone mapping),
         // so every material color is converted once when its object is created.
         const _linearizedMats = new WeakSet();
@@ -2001,6 +2022,16 @@
                     }
                 }
                 ctx.globalAlpha = 1;
+            } },
+            wood: { w: 256, h: 64, draw(ctx, w, h) {
+                ctx.fillStyle = '#5b4636'; ctx.fillRect(0, 0, w, h);
+                for (let i = 0; i < 70; i++) {
+                    ctx.strokeStyle = pick(['#3e2f24', '#6e5644', '#4a382b', '#2f241c']); ctx.lineWidth = rnd(0.6, 2); ctx.globalAlpha = 0.6;
+                    const y0 = Math.random() * h, ph = Math.random() * 6;
+                    ctx.beginPath(); for (let x = 0; x <= w; x += 8) { const y = y0 + Math.sin(x * 0.03 + ph) * 2; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+                speckle(ctx, w, h, 900, ['#1f1712', '#7a6250'], 1, 2, 0.4);
             } },
             rock: { w: 256, h: 256, draw(ctx, w, h) {
                 ctx.fillStyle = '#808283'; ctx.fillRect(0, 0, w, h);
@@ -2285,13 +2316,27 @@
         const SKY_FRAG = `
             uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 bottomColor;
             uniform vec3 sunDir; uniform vec3 sunColor; uniform float sunSize; uniform float stars;
+            uniform float clouds; uniform vec3 cloudColor;
             varying vec3 vDir;
             float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
+            float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+            float n2(vec2 p) {
+                vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+                return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), f.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), f.x), f.y);
+            }
+            float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * n2(p); p *= 2.03; a *= 0.5; } return v; }
             void main() {
                 vec3 d = normalize(vDir);
                 float h = d.y;
                 vec3 col = h > 0.0 ? mix(horizonColor, topColor, pow(clamp(h, 0.0, 1.0), 0.55))
-                                   : mix(horizonColor, bottomColor, clamp(-h * 4.0, 0.0, 1.0));
+                                   : mix(horizonColor, bottomColor, clamp(-h * 1.2, 0.0, 1.0));
+                if (clouds > 0.0 && h > 0.0) {
+                    vec2 uv = d.xz / (d.y + 0.18) * 1.7;
+                    float c = fbm(uv);
+                    float cov = smoothstep(0.52, 0.8, c) * smoothstep(0.0, 0.22, h) * clouds;
+                    float shade = 0.75 + 0.35 * smoothstep(0.5, 0.9, fbm(uv * 1.7 + 3.1));
+                    col = mix(col, cloudColor * shade, cov);
+                }
                 float sd = max(dot(d, normalize(sunDir)), 0.0);
                 col += sunColor * (pow(sd, 900.0) * 6.0 * sunSize + pow(sd, 18.0) * 0.35 * sunSize);
                 if (stars > 0.0 && h > 0.05) {
@@ -2314,7 +2359,9 @@
                     sunDir: { value: new THREE.Vector3(...cfg.skySunDir).normalize() },
                     sunColor: { value: linColor(cfg.skySunColor) },
                     sunSize: { value: cfg.skySunSize },
-                    stars: { value: cfg.stars || 0 }
+                    stars: { value: cfg.stars || 0 },
+                    clouds: { value: cfg.clouds || 0 },
+                    cloudColor: { value: linColor(cfg.cloudColor || 0xffffff) }
                 },
                 vertexShader: SKY_VERT,
                 fragmentShader: SKY_FRAG,
@@ -2419,7 +2466,7 @@
         let speedLines = [], speedLineMat = null;
         let travelDistance = 0;
         let camShake = 0;
-        const camBase = new THREE.Vector3(0, 6.2, 9.5);
+        const camBase = new THREE.Vector3(0, CAM_HEIGHT, CAM_DIST);
         let lastStepSign = 0;
 
         function initMainScene() {
@@ -2536,7 +2583,7 @@
             delete opts.bumpScale;
             const mat = new THREE.MeshStandardMaterial(opts);
             if (Q().bump) { mat.bumpMap = getTexture(key, 1, 1, false); mat.bumpScale = bumpScale; }
-            const plane = new THREE.Mesh(new THREE.PlaneGeometry(width, len), mat);
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(width, len, 1, 180), mat);
             plane.rotation.x = -Math.PI / 2;
             plane.position.set(x, y, -170);
             envGroup.add(plane);
@@ -2602,27 +2649,27 @@
             addGroundPlane('gravel', 12.8, 2.2, 0.0, 0, { roughness: 1, bumpScale: 0.06 });
 
             // Concrete sleepers (one instanced draw call for the whole line)
-            const sleeperMat = new THREE.MeshStandardMaterial({ map: getTexture('concrete', 1, 0.3), roughness: 0.9 });
-            instancedRow(new THREE.BoxGeometry(2.6, 0.16, 0.3), sleeperMat, 1.5, LANES.map(x => ({ x, y: 0.08 })));
+            const sleeperMat = new THREE.MeshStandardMaterial({ color: 0xd2c2b2, map: getTexture('wood', 1, 0.25), roughness: 0.95 });
+            instancedRow(new THREE.BoxGeometry(2.5, 0.12, 0.24), sleeperMat, 0.72, LANES.map(x => ({ x, y: 0.04 })));
 
             // Steel rails: rusty web + polished running surface that reflects the sky
             const railMat = new THREE.MeshStandardMaterial({ color: 0x5d544c, metalness: 0.7, roughness: 0.6 });
             const railHeadMat = new THREE.MeshStandardMaterial({ color: 0xd2d5d9, metalness: 1.0, roughness: 0.2 });
-            const railGeo = new THREE.BoxGeometry(0.1, 0.15, 420);
-            const headGeo = new THREE.BoxGeometry(0.075, 0.035, 420);
+            const railGeo = new THREE.BoxGeometry(0.1, 0.15, 420, 1, 1, 180);
+            const headGeo = new THREE.BoxGeometry(0.075, 0.035, 420, 1, 1, 180);
             LANES.forEach(lx => [-0.72, 0.72].forEach(o => {
-                envMesh(railGeo, railMat, lx + o, 0.235, -170);
-                envMesh(headGeo, railHeadMat, lx + o, 0.327, -170);
+                envMesh(railGeo, railMat, lx + o, 0.175, -170);
+                envMesh(headGeo, railHeadMat, lx + o, 0.267, -170);
             }));
 
             // Retaining walls with graffiti (texture scrolls with the run)
-            const wallGeo = new THREE.PlaneGeometry(420, 2.6);
+            const wallGeo = new THREE.PlaneGeometry(420, 2.6, 180, 1);
             const wallL = new THREE.MeshStandardMaterial({ map: scrollTexture('concreteWall', 420 / 20, 1, 20, true, 'x', 1), roughness: 0.92 });
             const wallR = new THREE.MeshStandardMaterial({ map: scrollTexture('concreteWall', 420 / 20, 1, 20, true, 'x', -1), roughness: 0.92 });
             const wl = envMesh(wallGeo, wallL, -7.3, 1.3, -170); wl.rotation.y = Math.PI / 2;
             const wr = envMesh(wallGeo, wallR, 7.3, 1.3, -170); wr.rotation.y = -Math.PI / 2;
             const capMat = new THREE.MeshStandardMaterial({ color: 0x8a8781, roughness: 0.9 });
-            const capGeo = new THREE.BoxGeometry(0.5, 0.18, 420);
+            const capGeo = new THREE.BoxGeometry(0.5, 0.18, 420, 1, 1, 180);
             envMesh(capGeo, capMat, -7.5, 2.65, -170);
             envMesh(capGeo, capMat, 7.5, 2.65, -170);
 
@@ -2632,7 +2679,7 @@
             instancedRow(new THREE.BoxGeometry(13.6, 0.32, 0.32), steelMat, 36, [{ x: 0, y: 11.2 }], true);
             instancedRow(new THREE.BoxGeometry(0.06, 0.75, 0.06), steelMat, 36, LANES.map(x => ({ x, y: 10.75 })));
             const wireMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.6, roughness: 0.5 });
-            const wireGeo = new THREE.BoxGeometry(0.03, 0.03, 420);
+            const wireGeo = new THREE.BoxGeometry(0.03, 0.03, 420, 1, 1, 180);
             LANES.forEach(lx => { envMesh(wireGeo, wireMat, lx, 10.4, -170); envMesh(wireGeo, wireMat, lx, 11.05, -170); });
 
             addBuildings(q, { night: false, xBase: 13.5, step: 16, minH: 9, maxH: 27, styles: [0, 2, 4, 1], depth: 10 });
@@ -2640,19 +2687,19 @@
 
         function buildCityMap(q) {
             addGroundPlane('sidewalk', 160, 3, -0.06, 0, { color: 0x7d838b });
-            addGroundPlane('asphalt', 12.8, 4, 0.0, 0, { roughness: 0.38, metalness: 0.15, color: 0xb4b4b4, bumpScale: 0.02 });
+            addGroundPlane('asphalt', 12.8, 4, 0.0, 0, { roughness: 0.3, metalness: 0.2, color: 0xe2e2e8, bumpScale: 0.02 });
             addGroundPlane('sidewalk', 3.4, 1.7, 0.22, -8.3, { color: 0xc4c8ce });
             addGroundPlane('sidewalk', 3.4, 1.7, 0.22, 8.3, { color: 0xc4c8ce });
 
             const curbMat = new THREE.MeshStandardMaterial({ map: getTexture('concrete', 1, 40), roughness: 0.85 });
-            const curbGeo = new THREE.BoxGeometry(0.3, 0.24, 420);
+            const curbGeo = new THREE.BoxGeometry(0.3, 0.24, 420, 1, 1, 180);
             envMesh(curbGeo, curbMat, -6.45, 0.12, -170);
             envMesh(curbGeo, curbMat, 6.45, 0.12, -170);
 
             const dashMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6, emissive: 0x2a2a2a });
             instancedRow(new THREE.BoxGeometry(0.16, 0.02, 2.8), dashMat, 7, [{ x: -1.6, y: 0.012 }, { x: 1.6, y: 0.012 }]);
             const lineMat = new THREE.MeshStandardMaterial({ color: 0xe8c547, roughness: 0.6, emissive: 0x221a00 });
-            const lineGeo = new THREE.BoxGeometry(0.14, 0.02, 420);
+            const lineGeo = new THREE.BoxGeometry(0.14, 0.02, 420, 1, 1, 180);
             envMesh(lineGeo, lineMat, -6.05, 0.012, -170);
             envMesh(lineGeo, lineMat, 6.05, 0.012, -170);
 
@@ -2662,8 +2709,8 @@
             instancedRow(new THREE.BoxGeometry(1.6, 0.1, 0.12), poleMat, 24, [{ x: -6.7, y: 9.78 }, { x: 6.7, y: 9.78 }], true);
             const lampMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd9a0, emissiveIntensity: 4 });
             instancedRow(new THREE.BoxGeometry(0.5, 0.12, 0.3), lampMat, 24, [{ x: -6.0, y: 9.7 }, { x: 6.0, y: 9.7 }]);
-            const poolMat = new THREE.MeshBasicMaterial({ map: getTexture('glow'), color: 0xffc98a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false });
-            const pools = instancedRow(new THREE.PlaneGeometry(7, 7), poolMat, 24, [{ x: -4.4, y: 0.03, rx: -Math.PI / 2 }, { x: 4.4, y: 0.03, rx: -Math.PI / 2 }]);
+            const poolMat = new THREE.MeshBasicMaterial({ map: getTexture('glow'), color: 0xffc98a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+            const pools = instancedRow(new THREE.PlaneGeometry(9, 9), poolMat, 24, [{ x: -4.4, y: 0.03, rx: -Math.PI / 2 }, { x: 4.4, y: 0.03, rx: -Math.PI / 2 }]);
             pools.userData.noReceive = true;
             const glowMatLamp = new THREE.SpriteMaterial({ map: getTexture('glow'), color: 0xffd49a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
             const glowGroup = new THREE.Group();
@@ -2893,6 +2940,7 @@
             const castShadows = Q().shadows;
             playerMesh.traverse(o => { if (o.isMesh && o !== playerMesh.userData.shieldMesh) o.castShadow = castShadows; });
             playerMesh.position.set(0, 0, 0);
+            playerMesh.scale.setScalar(PLAYER_SCALE);
             playerMesh.visible = wasVisible;
             scene.add(playerMesh);
         }
@@ -3566,8 +3614,8 @@
 
             // Realism systems reset
             playerMesh.visible = true;
-            camBase.set(0, 6.2, 9.5);
-            camera.fov = 60;
+            camBase.set(0, CAM_HEIGHT, CAM_DIST);
+            camera.fov = baseFov();
             camera.updateProjectionMatrix();
             camShake = 0;
             lastStepSign = 0;
@@ -3750,7 +3798,7 @@
             const tagEl = document.getElementById('floating-name-tag');
             if (!gameActive || !playerMesh) return;
 
-            const headHeight = isRolling ? 1.55 : 2.85;
+            const headHeight = (isRolling ? 1.55 : 2.85) * PLAYER_SCALE;
             tempProjVec.set(playerMesh.position.x, playerMesh.position.y + headHeight, playerMesh.position.z);
             tempProjVec.project(camera);
 
@@ -3765,6 +3813,53 @@
         // 10. ANIMATION & GAME LOOP
         // ==========================================
         let lastTime = performance.now();
+        let runPhaseAcc = 0;
+
+        // Biomechanical run cycle. phase = left-leg phase (right leg is phase + PI).
+        // Limb rotation.x > 0 swings forward; knee rotation.x < 0 bends; shoe rotation.x > 0 lifts the toes.
+        function applyRunPose(ud, phase, k, speedT) {
+            const lerp = (o, key, v) => { o[key] += (v - o[key]) * k; };
+            const baseHipY = ud.baseHipY || 1.05;
+            const L = phase, R = phase + Math.PI;
+            const thigh = p => { const sn = Math.sin(p); return sn > 0 ? sn * (0.92 + 0.22 * speedT) : sn * 0.62; };
+            const knee = p => {
+                const swing = Math.max(0, Math.cos(p + 0.35));                 // heel kicks up while the leg swings through
+                const cushion = Math.max(0, Math.sin(p - Math.PI / 2)) * 0.26;  // soft bend at mid-stance
+                return -(0.16 + Math.pow(swing, 1.35) * (1.5 + 0.4 * speedT) + cushion);
+            };
+            const ankle = p => { const sn = Math.sin(p); return 0.22 * sn - 0.38 * Math.max(0, -sn); }; // toes up at landing, push off the toes
+            const arm = p => { const sn = Math.sin(p); return sn > 0 ? sn * (0.62 + 0.15 * speedT) : sn * 0.7; };
+
+            // Pelvis: two bounces per stride (high in flight, low at mid-stance), twist and roll
+            ud.hipsGroup.position.y = baseHipY - 0.06 + 0.085 * (1 - Math.cos(2 * phase)) * 0.5;
+            lerp(ud.hipsGroup.rotation, 'y', -0.17 * Math.sin(phase));
+            lerp(ud.hipsGroup.rotation, 'z', 0.045 * Math.cos(phase));
+            ud.hipsGroup.rotation.x = 0;
+
+            // Torso leans into the run and counter-twists against the hips
+            lerp(ud.bodyGroup.rotation, 'x', 0.2 + 0.1 * speedT + 0.03 * Math.cos(2 * phase));
+            lerp(ud.bodyGroup.rotation, 'y', 0.3 * Math.sin(phase));
+            lerp(ud.bodyGroup.rotation, 'z', -0.03 * Math.cos(phase));
+
+            // Head stays steady, eyes on the road
+            lerp(ud.headGroup.rotation, 'x', -0.16 - 0.1 * speedT - 0.03 * Math.cos(2 * phase));
+            lerp(ud.headGroup.rotation, 'y', -0.22 * Math.sin(phase));
+            ud.headGroup.rotation.z = 0;
+
+            // Legs
+            lerp(ud.leftLeg.rotation, 'x', thigh(L));   lerp(ud.rightLeg.rotation, 'x', thigh(R));
+            lerp(ud.leftKnee.rotation, 'x', knee(L));   lerp(ud.rightKnee.rotation, 'x', knee(R));
+            lerp(ud.leftShoe.rotation, 'x', ankle(L));  lerp(ud.rightShoe.rotation, 'x', ankle(R));
+            ud.leftLeg.rotation.z = 0.03; ud.rightLeg.rotation.z = -0.03;
+
+            // Arms swing opposite to the legs, elbows ~90 degrees, a little more bent when driving forward
+            lerp(ud.leftArm.rotation, 'x', arm(R));     lerp(ud.rightArm.rotation, 'x', arm(L));
+            lerp(ud.leftArm.rotation, 'z', -0.14 - Math.max(0, Math.sin(R)) * 0.12);
+            lerp(ud.rightArm.rotation, 'z', 0.14 + Math.max(0, Math.sin(L)) * 0.12);
+            lerp(ud.leftElbow.rotation, 'x', 1.35 + Math.max(0, Math.sin(R)) * 0.15);
+            lerp(ud.rightElbow.rotation, 'x', 1.35 + Math.max(0, Math.sin(L)) * 0.15);
+            ud.leftElbow.rotation.z = 0; ud.rightElbow.rotation.z = 0;
+        }
         const _camLook = new THREE.Vector3();
         const UI_EL = {};
         function el(id) { return UI_EL[id] || (UI_EL[id] = document.getElementById(id)); }
@@ -3854,8 +3949,9 @@
                 scrollWorld(7 * dt);
                 if (playerMesh) playerMesh.visible = false;
                 if (contactShadow) contactShadow.visible = false;
-                camera.position.lerp(_camLook.set(Math.sin(now * 0.00015) * 2.2, 5.0, 9.5), Math.min(1, dt * 1.5));
-                camera.lookAt(0, 2.4, -20);
+                camera.position.lerp(_camLook.set(Math.sin(now * 0.00015) * 2.2, CAM_HEIGHT, CAM_DIST), Math.min(1, dt * 1.5));
+                camera.fov = baseFov(); camera.updateProjectionMatrix();
+                camera.lookAt(0, CAM_LOOK_Y + 0.6, CAM_LOOK_Z);
                 updateWeather(dt, 7, now);
             }
 
@@ -3942,7 +4038,9 @@
                 // ===================== BIOMECHANICAL RUN / JUMP / ROLL =====================
                 const ud = playerMesh.userData;
                 const baseHipY = ud.baseHipY || 1.05;
-                const runPhase = now * 0.0185 * (gameSpeed / 20);
+                // Stride rhythm: ~1.6 strides/s when jogging, ~2.4 at top speed (accumulated, so speed changes never jerk)
+                runPhaseAcc += dt * Math.PI * 2 * (1.3 + gameSpeed * 0.024);
+                const runPhase = runPhaseAcc;
 
                 if (isRolling) {
                     rollTimer -= dt;
@@ -3968,51 +4066,15 @@
                     ud.leftLeg.rotation.x = 1.05; ud.leftKnee.rotation.x = -1.25;
                     ud.rightLeg.rotation.x = -0.45; ud.rightKnee.rotation.x = -0.75;
                 } else {
-                    const lPhase = runPhase, rPhase = runPhase + Math.PI;
-                    const calcThighAngle = (p) => { const s = Math.sin(p); return s > 0 ? s * 1.05 : s * 0.78; };
-                    const calcKneeAngle = (p) => {
-                        const recoveryLift = Math.max(0, Math.sin(p - 0.85));
-                        const impactCushion = Math.max(0, Math.sin(p * 2)) * 0.15;
-                        return -(0.12 + Math.pow(recoveryLift, 1.3) * 1.38 + impactCushion);
-                    };
-                    const calcAnkleAngle = (p) => Math.cos(p - 0.4) * 0.36;
+                    applyRunPose(ud, runPhase, Math.min(1, dt * 16), THREE.MathUtils.clamp((gameSpeed - BASE_START_SPEED) / (MAX_SPEED - BASE_START_SPEED), 0, 1));
 
-                    ud.hipsGroup.position.y = baseHipY - Math.cos(runPhase * 2) * 0.085 + 0.05;
-                    ud.hipsGroup.rotation.z = Math.sin(runPhase) * 0.065;
-                    ud.hipsGroup.rotation.y = -Math.sin(runPhase) * 0.14;
-
-                    ud.bodyGroup.rotation.x = THREE.MathUtils.lerp(ud.bodyGroup.rotation.x, 0.24 + Math.cos(runPhase * 2) * 0.035, dt * 14);
-                    ud.bodyGroup.rotation.y = Math.sin(runPhase) * 0.22;
-                    ud.bodyGroup.rotation.z = -Math.sin(runPhase) * 0.05;
-
-                    ud.headGroup.rotation.y = -Math.sin(runPhase) * 0.10;
-                    ud.headGroup.rotation.x = -0.18 + Math.cos(runPhase * 2) * 0.03;
-                    ud.headGroup.rotation.z = 0;
-
-                    ud.leftLeg.rotation.x = calcThighAngle(lPhase);
-                    ud.rightLeg.rotation.x = calcThighAngle(rPhase);
-                    ud.leftKnee.rotation.x = calcKneeAngle(lPhase);
-                    ud.rightKnee.rotation.x = calcKneeAngle(rPhase);
-                    ud.leftShoe.rotation.x = calcAnkleAngle(lPhase);
-                    ud.rightShoe.rotation.x = calcAnkleAngle(rPhase);
-
-                    const leftArmDrive = Math.sin(rPhase), rightArmDrive = Math.sin(lPhase);
-                    ud.leftArm.rotation.x = leftArmDrive > 0 ? leftArmDrive * 0.95 : leftArmDrive * 0.72;
-                    ud.rightArm.rotation.x = rightArmDrive > 0 ? rightArmDrive * 0.95 : rightArmDrive * 0.72;
-                    ud.leftArm.rotation.z = -0.12 + Math.max(0, leftArmDrive) * 0.14;
-                    ud.rightArm.rotation.z = 0.12 - Math.max(0, rightArmDrive) * 0.14;
-                    ud.leftElbow.rotation.x = 1.15 + Math.max(0, leftArmDrive) * 0.45;
-                    ud.rightElbow.rotation.x = 1.15 + Math.max(0, rightArmDrive) * 0.45;
-                    ud.leftElbow.rotation.z = 0;
-                    ud.rightElbow.rotation.z = 0;
-
-                    // Footfall: step sound + small dust puff exactly when a foot hits the ground
-                    const stepSign = Math.sin(runPhase) >= 0 ? 1 : -1;
+                    // Footfall: step sound + small dust puff exactly when a foot hits the ground (cos crosses zero at contact)
+                    const stepSign = Math.cos(runPhase) >= 0 ? 1 : -1;
                     if (stepSign !== lastStepSign) {
                         lastStepSign = stepSign;
                         playSound('step');
                         createBurstParticles(
-                            new THREE.Vector3(playerMesh.position.x + (stepSign > 0 ? -0.22 : 0.22), 0.08, 0.3),
+                            new THREE.Vector3(playerMesh.position.x + (stepSign > 0 ? 0.2 : -0.2), 0.08, 0.3),
                             dustColor(), 2, 0.5
                         );
                     }
@@ -4130,23 +4192,24 @@
                 if (contactShadow) {
                     contactShadow.visible = true;
                     const k = THREE.MathUtils.clamp(1 - playerY / 5, 0.35, 1);
-                    contactShadow.position.set(playerMesh.position.x, playerState.mapType === 'railway' ? 0.17 : 0.03, 0.05);
-                    contactShadow.scale.set(k * (isRolling ? 1.3 : 1), k * (isRolling ? 1.5 : 1), 1);
+                    contactShadow.position.set(playerMesh.position.x, playerState.mapType === 'railway' ? 0.11 : 0.03, 0.05);
+                    contactShadow.scale.set(k * PLAYER_SCALE * (isRolling ? 1.3 : 1), k * PLAYER_SCALE * (isRolling ? 1.5 : 1), 1);
                     contactShadow.material.opacity = 0.9 * k;
                 }
 
                 // Cinematic camera: speed-based FOV, running bob, impact shake
                 const speedT = THREE.MathUtils.clamp((gameSpeed - BASE_START_SPEED) / (MAX_SPEED - BASE_START_SPEED), 0, 1);
-                camera.fov = THREE.MathUtils.lerp(camera.fov, 60 + speedT * 14, Math.min(1, dt * 2));
+                camera.fov = THREE.MathUtils.lerp(camera.fov, baseFov() + speedT * 10, Math.min(1, dt * 2));
                 camera.updateProjectionMatrix();
                 camShake = Math.max(0, camShake - dt * 1.6);
                 const sx = (Math.random() - 0.5) * camShake, sy = (Math.random() - 0.5) * camShake;
                 const bob = (isJumping || isRolling) ? 0 : Math.abs(Math.sin(runPhase)) * 0.05;
                 camBase.x = THREE.MathUtils.lerp(camBase.x, playerMesh.position.x * 0.45 + camAngleOffsetX, Math.min(1, dt * 8));
-                camBase.y = THREE.MathUtils.lerp(camBase.y, 6.2 + playerMesh.position.y * 0.3 + camAngleOffsetY - (isRolling ? 0.5 : 0), Math.min(1, dt * 8));
-                camBase.z = THREE.MathUtils.lerp(camBase.z, 9.5 - speedT * 0.8, Math.min(1, dt * 2));
+                // Camera rises with jumps (so the runner never balloons toward the lens) and dips slightly on rolls
+                camBase.y = THREE.MathUtils.lerp(camBase.y, CAM_HEIGHT + playerMesh.position.y * 0.55 + camAngleOffsetY - (isRolling ? 0.35 : 0), Math.min(1, dt * 7));
+                camBase.z = THREE.MathUtils.lerp(camBase.z, CAM_DIST + speedT * 0.6, Math.min(1, dt * 2));
                 camera.position.set(camBase.x + sx, camBase.y + sy + bob, camBase.z);
-                camera.lookAt(playerMesh.position.x * 0.3 + sx * 0.5, 1.8, -10);
+                camera.lookAt(playerMesh.position.x * 0.35 + sx * 0.5, CAM_LOOK_Y + playerMesh.position.y * 0.35, CAM_LOOK_Z);
 
                 updateWeather(dt, gameSpeed, now);
                 updateFloatingNameplate();
