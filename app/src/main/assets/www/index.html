@@ -130,6 +130,16 @@
         }
         #hit-flash.on { opacity: 1; transition: none; }
         #game-canvas { touch-action: none; }
+        #dhikr-toast {
+            position: absolute; left: 50%; top: 26%; z-index: 12; pointer-events: none;
+            transform: translate(-50%, 10px) scale(0.9); opacity: 0;
+            font-family: 'Cairo', Tahoma, sans-serif; font-weight: 900; font-size: clamp(22px, 6vw, 38px);
+            color: #fde68a; white-space: nowrap;
+            text-shadow: 0 2px 0 #92400e, 0 0 18px rgba(251, 191, 36, 0.75), 0 4px 14px rgba(0,0,0,0.6);
+            transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+        }
+        #dhikr-toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+        #dhikr-toast.fade { opacity: 0; transform: translate(-50%, -26px) scale(1.05); transition: opacity 0.6s ease-in, transform 0.6s ease-in; }
         body { -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
         /* Respect phone notches / rounded corners */
         #hud-screen { padding-top: max(0.75rem, env(safe-area-inset-top)); padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
@@ -152,6 +162,7 @@
     <canvas id="game-canvas"></canvas>
     <div id="vignette"></div>
     <div id="hit-flash"></div>
+    <div id="dhikr-toast"></div>
 
     <!-- Floating Player Nameplate Over Character Head -->
     <div id="floating-name-tag" class="hidden">
@@ -465,6 +476,18 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Spoken dhikr toggle -->
+            <button type="button" id="btn-dhikr" onclick="toggleDhikr()" class="option-pill w-full mb-4 rounded-xl px-3 py-2 flex items-center justify-between bg-slate-800/70 cursor-pointer text-right">
+                <span class="flex items-center gap-2">
+                    <span class="text-lg">📿</span>
+                    <span>
+                        <span class="block font-black text-xs text-white">الأذكار الصوتية</span>
+                        <span class="block text-[10px] text-slate-300">القفز: الله أكبر • الانخفاض: سبحان الله • الربح: الحمد لله</span>
+                    </span>
+                </span>
+                <span id="dhikr-state" class="text-xs font-black px-2.5 py-1 rounded-lg bg-emerald-500/25 text-emerald-300">مفعّلة</span>
+            </button>
 
             <!-- Start Game Button -->
             <button onclick="startGame()" class="btn-arcade animate-pulse-slow w-full py-3 sm:py-3.5 rounded-2xl bg-gradient-to-l from-emerald-500 via-green-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-black text-base sm:text-lg flex items-center justify-center gap-3 cursor-pointer">
@@ -928,6 +951,62 @@
             } else {
                 stopAmbient();
             }
+        }
+
+        // ===== Spoken dhikr: up = الله أكبر, down = سبحان الله, gains = الحمد لله =====
+        let dhikrEnabled = safeGet('subway_ar_dhikr') !== '0';
+        let lastDhikrAt = 0, dhikrToastTimer = null, arabicVoice = null;
+        if ('speechSynthesis' in window) {
+            const pickVoice = () => { arabicVoice = speechSynthesis.getVoices().find(v => /^ar/i.test(v.lang)) || null; };
+            pickVoice();
+            speechSynthesis.onvoiceschanged = pickVoice;
+        }
+
+        function showDhikrToast(text) {
+            const t = document.getElementById('dhikr-toast');
+            if (!t) return;
+            clearTimeout(dhikrToastTimer);
+            t.textContent = text;
+            t.classList.remove('fade');
+            t.classList.add('show');
+            dhikrToastTimer = setTimeout(() => { t.classList.add('fade'); t.classList.remove('show'); }, 750);
+        }
+
+        function sayDhikr(text, minGapMs = 550) {
+            if (!dhikrEnabled) return;
+            const nowMs = performance.now();
+            if (nowMs - lastDhikrAt < minGapMs) return;
+            lastDhikrAt = nowMs;
+            showDhikrToast(text);
+            if (!soundEnabled) return;
+            try {
+                if (window.AndroidApp && typeof window.AndroidApp.speak === 'function') {
+                    window.AndroidApp.speak(text);
+                } else if ('speechSynthesis' in window) {
+                    speechSynthesis.cancel();
+                    const u = new SpeechSynthesisUtterance(text);
+                    u.lang = 'ar-SA';
+                    u.rate = 1.05;
+                    if (arabicVoice) u.voice = arabicVoice;
+                    speechSynthesis.speak(u);
+                }
+            } catch (e) {}
+        }
+
+        function refreshDhikrButton() {
+            const st = document.getElementById('dhikr-state');
+            if (!st) return;
+            st.textContent = dhikrEnabled ? 'مفعّلة' : 'متوقفة';
+            st.className = dhikrEnabled
+                ? 'text-xs font-black px-2.5 py-1 rounded-lg bg-emerald-500/25 text-emerald-300'
+                : 'text-xs font-black px-2.5 py-1 rounded-lg bg-slate-600/40 text-slate-300';
+        }
+
+        function toggleDhikr() {
+            dhikrEnabled = !dhikrEnabled;
+            safeSet('subway_ar_dhikr', dhikrEnabled ? '1' : '0');
+            refreshDhikrButton();
+            if (dhikrEnabled) { lastDhikrAt = 0; sayDhikr('سبحان الله'); }
         }
 
         function refreshSoundIcons() {
@@ -3113,6 +3192,7 @@
                     velocityY = JUMP_FORCE;
                     jumpBufferTimer = 0;
                     playSound('jump');
+                    sayDhikr('الله أكبر');
                 } else {
                     // Buffer the jump so if the player swipes up just before touching the ground, it jumps immediately on landing!
                     jumpBufferTimer = 0.24;
@@ -3125,6 +3205,7 @@
                 isRolling = true;
                 rollTimer = 0.65;
                 playSound('roll');
+                sayDhikr('سبحان الله');
             }
         }
 
@@ -3788,6 +3869,7 @@
                     el('level-up-banner').classList.remove('hidden'); el('level-up-banner').classList.add('flex');
                     levelBannerTimer = 1.6;
                     playSound('powerup');
+                    sayDhikr('الحمد لله', 300);
                 }
 
                 if (levelBannerTimer > 0) {
@@ -3996,6 +4078,7 @@
                         el('hud-coins').textContent = runCoins;
                         el('hud-wallet-coins').textContent = playerState.totalCoins + runCoins;
                         playSound('coin');
+                        if (runCoins % 10 === 0) sayDhikr('الحمد لله', 300);
                         createBurstParticles(c.position, 0xfacc15, 7);
                         scene.remove(c);
                         coinsList.splice(i, 1);
@@ -4017,6 +4100,7 @@
                         badge.classList.remove('hidden');
                         badge.classList.add('flex');
                         playSound('powerup');
+                        sayDhikr('الحمد لله', 300);
                         haptic(40);
                         createBurstParticles(p.position, 0x10b981, 14);
                         scene.remove(p);
@@ -4308,6 +4392,7 @@
             applyPlatformUI();
             if (!IS_ANDROID_APP) initPWASupport();
             refreshSoundIcons();
+            refreshDhikrButton();
             updateUIWithPlayerState();
             initPreviewScene();
             initMainScene();

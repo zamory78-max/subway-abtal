@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
+import android.speech.tts.TextToSpeech;
 import android.os.Vibrator;
 import android.view.View;
 import android.view.WindowInsets;
@@ -22,17 +23,21 @@ import android.webkit.WebViewClient;
 
 import androidx.webkit.WebViewAssetLoader;
 
+import java.util.Locale;
+
 /**
  * Hosts the 3D game (assets/www/index.html) in a full-screen WebView.
  * Files are served from https://appassets.androidplatform.net so that
  * localStorage (high score, coins, settings) persists and nothing needs the internet.
  */
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
 
     private static final String START_URL = "https://appassets.androidplatform.net/assets/www/index.html";
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
+    private TextToSpeech tts;
+    private volatile boolean ttsReady = false;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -85,12 +90,22 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new GameBridge(), "AndroidApp");
 
         hideSystemUI();
+        tts = new TextToSpeech(this, this);
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
             webView.loadUrl(START_URL);
         }
+    }
+
+    /** Arabic voice for the in-game dhikr (uses the phone's text-to-speech engine). */
+    @Override
+    public void onInit(int status) {
+        if (status != TextToSpeech.SUCCESS || tts == null) return;
+        int r = tts.setLanguage(new Locale("ar"));
+        ttsReady = r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED;
+        tts.setSpeechRate(1.05f);
     }
 
     @SuppressWarnings("deprecation")
@@ -126,6 +141,7 @@ public class MainActivity extends Activity {
             webView.evaluateJavascript("window.onAppPause && window.onAppPause();", null);
             webView.onPause();
         }
+        if (tts != null) tts.stop();
         super.onPause();
     }
 
@@ -144,6 +160,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (tts != null) {
+            tts.shutdown();
+            tts = null;
+        }
         if (webView != null) {
             webView.removeJavascriptInterface("AndroidApp");
             webView.destroy();
@@ -179,6 +199,17 @@ public class MainActivity extends Activity {
             } else {
                 v.vibrate(d);
             }
+        }
+
+        @JavascriptInterface
+        public boolean ttsAvailable() {
+            return ttsReady;
+        }
+
+        @JavascriptInterface
+        public void speak(String text) {
+            if (!ttsReady || tts == null || text == null) return;
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dhikr");
         }
 
         @JavascriptInterface

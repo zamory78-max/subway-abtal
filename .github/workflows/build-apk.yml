@@ -24,6 +24,20 @@ jobs:
           echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
           yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
+      - name: Load permanent signing key
+        env:
+          KS_B64: ${{ secrets.ABTAL_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ABTAL_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/abtal-release.jks"
+            echo "ABTAL_KEYSTORE=$RUNNER_TEMP/abtal-release.jks" >> "$GITHUB_ENV"
+            echo "ABTAL_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "Using permanent signing key"
+          else
+            echo "::warning::No ABTAL_KEYSTORE_BASE64 secret - using a temporary debug key (updates will not install over older versions)"
+          fi
+
       - name: Download offline game libraries
         run: bash tools/download-libs.sh
 

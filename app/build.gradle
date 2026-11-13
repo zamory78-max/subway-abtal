@@ -10,16 +10,29 @@ android {
         applicationId "com.abtal.subway"
         minSdk 24
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        // Every cloud build gets a higher versionCode so it installs as an update
+        versionCode((System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger())
+        versionName "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+
+    // Permanent signing key (from GitHub secrets) so each new APK installs over the previous one.
+    // Without the secrets (e.g. a local build) the debug key is used instead.
+    def ksPath = System.getenv("ABTAL_KEYSTORE")
+    signingConfigs {
+        release {
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ABTAL_KEYSTORE_PASSWORD")
+                keyAlias "abtal"
+                keyPassword System.getenv("ABTAL_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            // Signed with the debug key so the APK installs directly on any phone.
-            // For Google Play, create your own key: Build > Generate Signed App Bundle.
-            signingConfig signingConfigs.debug
+            signingConfig ksPath ? signingConfigs.release : signingConfigs.debug
         }
     }
 
