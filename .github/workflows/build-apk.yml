@@ -29,8 +29,10 @@ jobs:
           KS_B64: ${{ secrets.ABTAL_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.ABTAL_KEYSTORE_PASSWORD }}
         run: |
+          KS_PASS="$(printf '%s' "$KS_PASS" | tr -d '[:space:]')"
+          KS_B64="$(printf '%s' "$KS_B64" | tr -d '[:space:]')"
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/abtal-release.jks"
+            printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/abtal-release.jks"
             echo "ABTAL_KEYSTORE=$RUNNER_TEMP/abtal-release.jks" >> "$GITHUB_ENV"
             echo "ABTAL_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
             echo "Using permanent signing key"
