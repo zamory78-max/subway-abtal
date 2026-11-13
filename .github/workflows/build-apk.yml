@@ -46,13 +46,16 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk SubwayAbtal.apk
+          ./gradlew assemblePhoneRelease assembleTvRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/phone/release/app-phone-release.apk SubwayAbtal.apk
+          cp app/build/outputs/apk/tv/release/app-tv-release.apk SubwayAbtal-TV.apk
 
       - uses: actions/upload-artifact@v5
         with:
           name: SubwayAbtal-APK
-          path: SubwayAbtal.apk
+          path: |
+            SubwayAbtal.apk
+            SubwayAbtal-TV.apk
 
       # Publish the APK as a Release so it can be downloaded directly on a phone:
       # https://github.com/<user>/<repo>/releases/latest/download/SubwayAbtal.apk
@@ -61,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v1.0.${{ github.run_number }}"
-          gh release create "$TAG" SubwayAbtal.apk \
+          gh release create "$TAG" SubwayAbtal.apk SubwayAbtal-TV.apk \
             --title "سابواي الأبطال 3D — $TAG" \
-            --notes "ثبّت ملف SubwayAbtal.apk على هاتفك (اسمح بالتثبيت من مصادر غير معروفة إذا طُلب منك)." \
+            --notes "📱 الهاتف: SubwayAbtal.apk — 📺 أندرويد تي في: SubwayAbtal-TV.apk (التحكم بأسهم الريموت)" \
             --latest

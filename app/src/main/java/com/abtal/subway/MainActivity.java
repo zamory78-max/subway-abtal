@@ -2,7 +2,9 @@ package com.abtal.subway;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.UiModeManager;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -69,7 +71,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         s.setSupportZoom(false);
-        s.setUserAgentString(s.getUserAgentString() + " AbtalApp/1.0");
+        s.setUserAgentString(s.getUserAgentString() + " AbtalApp/1.0" + (isTelevision() ? " AbtalTV" : ""));
 
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         webView.setVerticalScrollBarEnabled(false);
@@ -88,6 +90,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             }
         });
         webView.addJavascriptInterface(new GameBridge(), "AndroidApp");
+        // Remote-control (D-pad) keys must reach the game page
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.requestFocus();
 
         hideSystemUI();
         tts = new TextToSpeech(this, this);
@@ -97,6 +103,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         } else {
             webView.loadUrl(START_URL);
         }
+    }
+
+    private boolean isTelevision() {
+        UiModeManager ui = (UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
+        return ui != null && ui.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
     /** Arabic voice for the in-game dhikr (uses the phone's text-to-speech engine). */
@@ -148,7 +159,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     @Override
     protected void onResume() {
         super.onResume();
-        if (webView != null) webView.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.requestFocus();
+        }
         hideSystemUI();
     }
 

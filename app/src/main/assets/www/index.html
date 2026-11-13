@@ -130,6 +130,19 @@
         }
         #hit-flash.on { opacity: 1; transition: none; }
         #game-canvas { touch-action: none; }
+        /* ---- Android TV: big visible focus ring for remote-control navigation ---- */
+        body.tv-mode #touch-controls { display: none !important; }
+        body.tv-mode button:focus, body.tv-mode input:focus, body.tv-mode [onclick]:focus {
+            outline: 4px solid #facc15 !important; outline-offset: 3px;
+            box-shadow: 0 0 0 8px rgba(250, 204, 21, 0.35), 0 0 24px rgba(250, 204, 21, 0.55) !important;
+            transform: scale(1.04); transition: transform 0.12s ease-out; z-index: 5; position: relative;
+        }
+        #tv-hint { display: none; }
+        body.tv-mode #tv-hint {
+            display: block; position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.15); color: #e2e8f0;
+            padding: 4px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none;
+        }
         #dhikr-toast {
             position: absolute; left: 50%; top: 26%; z-index: 12; pointer-events: none;
             transform: translate(-50%, 10px) scale(0.9); opacity: 0;
@@ -265,7 +278,8 @@
         </div>
 
         <!-- Bottom Touch Action Buttons (For Mobile & Mouse Convenience) -->
-        <div class="w-full max-w-md mx-auto flex flex-col items-center gap-1.5 pb-1 pointer-events-auto opacity-85 hover:opacity-100 transition">
+        <div id="tv-hint">⬅️ ➡️ تغيير المسار  •  ⬆️ قفز  •  ⬇️ انخفاض  •  OK إيقاف مؤقت</div>
+        <div id="touch-controls" class="w-full max-w-md mx-auto flex flex-col items-center gap-1.5 pb-1 pointer-events-auto opacity-85 hover:opacity-100 transition">
             <div class="text-[11px] text-slate-200/90 bg-slate-900/70 px-3 py-0.5 rounded-full backdrop-blur-sm mb-0.5 border border-white/10">
                 اسحب إصبعك بسلاسة بأي اتجاه أو اضغط الأزرار للتحكم الفوري
             </div>
@@ -717,7 +731,9 @@
 
         // Platform detection (the Android app adds "AbtalApp" to its user agent and exposes window.AndroidApp)
         const IS_ANDROID_APP = /AbtalApp/i.test(navigator.userAgent) || typeof window.AndroidApp !== 'undefined';
-        const IS_MOBILE = IS_ANDROID_APP || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+        // Android TV: the app adds "AbtalTV" to the user agent; ?tv=1 forces TV mode for testing in a browser
+        const IS_TV = /AbtalTV/i.test(navigator.userAgent) || /[?&]tv=1/.test(location.search);
+        const IS_MOBILE = !IS_TV && (IS_ANDROID_APP || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent));
 
         function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
         function safeSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
@@ -736,7 +752,7 @@
             outfitTheme: parseInt(safeGet(STORAGE_KEYS.THEME) || '0', 10),
             highScore: parseInt(safeGet(STORAGE_KEYS.HIGH_SCORE) || '0', 10),
             totalCoins: parseInt(safeGet(STORAGE_KEYS.TOTAL_COINS) || '40', 10), // Start with 40 bonus coins so user can test revive
-            quality: safeGet(STORAGE_KEYS.QUALITY) || (IS_MOBILE ? 'medium' : 'high') // 'low' | 'medium' | 'high'
+            quality: safeGet(STORAGE_KEYS.QUALITY) || ((IS_MOBILE || IS_TV) ? 'medium' : 'high') // 'low' | 'medium' | 'high'
         };
         (function initPlayerName() {
             const typed = loadSavedName();
@@ -4383,6 +4399,99 @@
             document.querySelectorAll('[onclick="toggleFullScreen()"]').forEach(b => b.classList.add('hidden'));
         }
 
+
+        // ==========================================
+        // 13. ANDROID TV: D-pad navigation for menus, OK = select, arrows = play
+        // ==========================================
+        const TV_OVERLAYS = ['app-export-modal', 'revive-screen', 'pause-screen', 'gameover-screen', 'menu-screen'];
+        function tvActiveOverlay() {
+            for (const id of TV_OVERLAYS) { if (isShown(id)) return document.getElementById(id); }
+            return null;
+        }
+        function tvFocusables(scope) {
+            return [...scope.querySelectorAll('button, input, a[href], [onclick]')].filter(el => {
+                if (el.disabled || el.closest('.hidden')) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 4 && r.height > 4;
+            }).map(el => { if (el.tabIndex < 0 || !el.hasAttribute('tabindex')) el.tabIndex = 0; return el; });
+        }
+        function tvFocus(el) {
+            if (!el) return;
+            el.focus({ preventScroll: true });
+            el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        }
+        function tvFocusFirst() {
+            const scope = tvActiveOverlay();
+            if (!scope) return;
+            const items = tvFocusables(scope);
+            const primary = items.find(el => /startGame|togglePause|clearNearby|revive/i.test(el.getAttribute('onclick') || '')) || items[0];
+            tvFocus(primary);
+        }
+        function tvMove(dir) {
+            const scope = tvActiveOverlay();
+            if (!scope) return;
+            const items = tvFocusables(scope);
+            if (!items.length) return;
+            const cur = document.activeElement;
+            if (!items.includes(cur)) { tvFocusFirst(); return; }
+            const a = cur.getBoundingClientRect();
+            const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+            let best = null, bestScore = Infinity;
+            for (const el of items) {
+                if (el === cur) continue;
+                const b = el.getBoundingClientRect();
+                const bx = b.left + b.width / 2, by = b.top + b.height / 2;
+                const dx = bx - ax, dy = by - ay;
+                let main, cross;
+                if (dir === 'up') { main = -dy; cross = Math.abs(dx); }
+                else if (dir === 'down') { main = dy; cross = Math.abs(dx); }
+                else if (dir === 'left') { main = -dx; cross = Math.abs(dy); }
+                else { main = dx; cross = Math.abs(dy); }
+                if (main <= 2) continue;
+                const score = main + cross * 2.2;
+                if (score < bestScore) { bestScore = score; best = el; }
+            }
+            if (best) tvFocus(best);
+        }
+
+        function initTVMode() {
+            if (!IS_TV) return;
+            document.body.classList.add('tv-mode');
+            // Re-focus the main button whenever a menu / pause / game-over screen appears
+            const obs = new MutationObserver(() => setTimeout(() => {
+                const scope = tvActiveOverlay();
+                if (scope && !scope.contains(document.activeElement)) tvFocusFirst();
+            }, 60));
+            TV_OVERLAYS.forEach(id => { const el = document.getElementById(id); if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] }); });
+            setTimeout(tvFocusFirst, 300);
+
+            window.addEventListener('keydown', (e) => {
+                const k = e.key;
+                const overlay = tvActiveOverlay();
+                const playing = gameActive && !gamePaused && !overlay;
+                if (k === 'MediaPlayPause' || k === 'MediaPlay' || k === 'MediaPause') {
+                    if (gameActive && !isShown('revive-screen')) togglePause();
+                    e.preventDefault(); e.stopImmediatePropagation(); return;
+                }
+                if (playing) {
+                    // OK / Enter on the remote pauses the run; arrows are handled by the normal game controls
+                    if (k === 'Enter') { togglePause(); e.preventDefault(); e.stopImmediatePropagation(); }
+                    return;
+                }
+                if (!overlay) return;
+                const inInput = document.activeElement && document.activeElement.tagName === 'INPUT';
+                const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+                if (map[k]) {
+                    if (inInput && (k === 'ArrowLeft' || k === 'ArrowRight')) return; // move the text cursor
+                    tvMove(map[k]);
+                    e.preventDefault(); e.stopImmediatePropagation();
+                } else if (k === 'Enter' && !inInput) {
+                    const el = document.activeElement;
+                    if (el && el !== document.body) { el.click(); e.preventDefault(); e.stopImmediatePropagation(); }
+                }
+            }, true);
+        }
+
         window.onload = function () {
             if (typeof THREE === 'undefined') {
                 document.body.insertAdjacentHTML('beforeend',
@@ -4390,6 +4499,7 @@
                 return;
             }
             applyPlatformUI();
+            initTVMode();
             if (!IS_ANDROID_APP) initPWASupport();
             refreshSoundIcons();
             refreshDhikrButton();
