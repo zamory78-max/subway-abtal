@@ -5,13 +5,16 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -28,8 +31,21 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk SubwayAbtal.apk
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: SubwayAbtal-APK
-          path: app/build/outputs/apk/release/*.apk
+          path: SubwayAbtal.apk
+
+      # Publish the APK as a Release so it can be downloaded directly on a phone:
+      # https://github.com/<user>/<repo>/releases/latest/download/SubwayAbtal.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" SubwayAbtal.apk \
+            --title "سابواي الأبطال 3D — $TAG" \
+            --notes "ثبّت ملف SubwayAbtal.apk على هاتفك (اسمح بالتثبيت من مصادر غير معروفة إذا طُلب منك)." \
+            --latest
