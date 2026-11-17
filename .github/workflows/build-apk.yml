@@ -68,3 +68,13 @@ jobs:
             --title "سابواي الأبطال 3D — $TAG" \
             --notes "📱 الهاتف: SubwayAbtal.apk — 📺 أندرويد تي في: SubwayAbtal-TV.apk (التحكم بأسهم الريموت)" \
             --latest
+
+      - name: نشر نسخة في مستودع التحميلات العام (apps-downloads)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOADS_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::DOWNLOADS_TOKEN غير مضبوط، تم تخطي النشر في apps-downloads"; exit 0; fi
+          gh release view subway -R zamory78-max/apps-downloads >/dev/null 2>&1 || \
+            gh release create subway -R zamory78-max/apps-downloads --title "سابواي الأبطال 3D" --notes "آخر نسخة من سابواي الأبطال 3D"
+          gh release upload subway SubwayAbtal.apk SubwayAbtal-TV.apk -R zamory78-max/apps-downloads --clobber
