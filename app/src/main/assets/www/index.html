@@ -264,6 +264,7 @@
                         <div id="hud-powerup-timer" class="text-xs font-black text-white">5s</div>
                     </div>
                 </div>
+                <div id="hud-boost" class="hidden hud-badge px-3 py-1 rounded-2xl text-xs font-black text-amber-300 border-amber-400/60 bg-slate-900/80 shadow-lg"></div>
             </div>
             <!--Controls (Pause & Audio & Camera) -->
             <div class="flex items-center gap-2 pointer-events-auto">
@@ -1808,9 +1809,19 @@
         // "Curved world": everything bends gently downward with distance, so the road seems to roll
         // toward the runner from over the horizon instead of lying flat. Shadow-depth passes are not bent.
         const WORLD_CURVE = 0.0011;
+        const CAM_DIST_BEND = 8.8;
+        // Road bends (x) and hills (y) are purely visual: applied in view space relative to the runner, so gameplay stays straight.
+        const WORLD_BEND = { value: new THREE.Vector3(0, 0, 0) };
+        THREE.Material.prototype.onBeforeCompile = function (shader) {
+            shader.uniforms.uBend = WORLD_BEND;
+            shader.vertexShader = 'uniform vec3 uBend;\n' + shader.vertexShader;
+        };
         (function patchWorldCurve() {
             const bend = `
 #ifndef DEPTH_PACKING
+    float bendD = min(0.0, mvPosition.z + ${CAM_DIST_BEND.toFixed(1)});
+    mvPosition.x += uBend.x * bendD * bendD;
+    mvPosition.y += uBend.y * bendD;
     mvPosition.y -= ${WORLD_CURVE.toFixed(5)} * mvPosition.z * mvPosition.z;
 #endif
 `;
@@ -3115,6 +3126,97 @@
             powerupsList.push(group);
         }
 
+        function spawnBoost(kind, laneIndex, zPos) {
+            const col = kind === 'magnet' ? 0xa855f7 : 0xfacc15;
+            const group = new THREE.Group();
+            const orb = new THREE.Mesh(new THREE.OctahedronGeometry(0.55, 0), new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.6, roughness: 0.3, metalness: 0.3 }));
+            linearizeObject(orb);
+            const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: getTexture('glow'), color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+            glow.scale.setScalar(2.4);
+            group.add(orb, glow);
+            group.userData.kind = kind;
+            group.position.set(LANES[laneIndex], 1.3, zPos);
+            scene.add(group);
+            powerupsList.push(group);
+        }
+
+        // ---- City traffic: cars and pedestrians
+        let CARX = null;
+        function carAssets() {
+            if (CARX) return CARX;
+            const mk = (c, o) => { const m = new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.35, metalness: 0.45 }, o || {})); linearizeMaterial(m); return m; };
+            const wheel = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 14); wheel.rotateZ(Math.PI / 2);
+            CARX = {
+                body: new THREE.BoxGeometry(2.0, 0.72, 4.5), cabin: new THREE.BoxGeometry(1.74, 0.62, 2.3), wheel,
+                lamp: new THREE.BoxGeometry(0.42, 0.18, 0.08),
+                glass: mk(0x18222e, { metalness: 0.8, roughness: 0.1 }), tire: mk(0x101010, { roughness: 0.9, metalness: 0 }),
+                head: mk(0xfff4d0, { emissive: 0xfff0b0, emissiveIntensity: 3 }), tail: mk(0xff2020, { emissive: 0xff1010, emissiveIntensity: 2.4 }),
+                paints: [0xd32f2f, 0x1976d2, 0xf2b01e, 0xe8e8e8, 0x2e7d32, 0x22252b, 0x7b1fa2, 0xf57c00].map(c => mk(c)),
+                skin: [0xf1c27d, 0xc68642, 0x8d5524, 0xe0ac69].map(c => mk(c, { metalness: 0, roughness: 0.8 })),
+                cloth: [0x2563eb, 0xdc2626, 0x16a34a, 0xf59e0b, 0x7c3aed, 0x0891b2, 0xe11d48].map(c => mk(c, { metalness: 0, roughness: 0.85 })),
+                pants: mk(0x2f3542, { metalness: 0, roughness: 0.9 }),
+                torso: new THREE.BoxGeometry(0.5, 0.7, 0.28), head: new THREE.SphereGeometry(0.19, 10, 8),
+                limb: new THREE.BoxGeometry(0.17, 0.72, 0.17), arm: new THREE.BoxGeometry(0.13, 0.6, 0.13)
+            };
+            return CARX;
+        }
+        function buildCar(oncoming) {
+            const A = carAssets(), g = new THREE.Group(), paint = pick(A.paints);
+            const body = new THREE.Mesh(A.body, paint); body.position.y = 0.58; body.userData.cast = true;
+            const cabin = new THREE.Mesh(A.cabin, A.glass); cabin.position.set(0, 1.25, -0.2); cabin.userData.cast = true;
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.08, 2.2), paint); roof.position.set(0, 1.58, -0.2);
+            g.add(body, cabin, roof);
+            [[-1.0, 1.4], [1.0, 1.4], [-1.0, -1.4], [1.0, -1.4]].forEach(([x, z]) => { const w = new THREE.Mesh(A.wheel, A.tire); w.position.set(x, 0.36, z); g.add(w); });
+            [-0.62, 0.62].forEach(x => {
+                const h = new THREE.Mesh(A.lamp, A.head); h.position.set(x, 0.7, 2.26); g.add(h);
+                const t = new THREE.Mesh(A.lamp, A.tail); t.position.set(x, 0.7, -2.26); g.add(t);
+            });
+            if (oncoming && SM) [-0.62, 0.62].forEach(x => { const gl = new THREE.Sprite(SM.glow); gl.position.set(x, 0.7, 2.6); gl.scale.setScalar(1.8); g.add(gl); });
+            if (!oncoming) g.rotation.y = Math.PI;
+            const holder = new THREE.Group(); holder.add(g);
+            return holder;
+        }
+        function buildPedestrian() {
+            const A = carAssets(), g = new THREE.Group();
+            const torso = new THREE.Mesh(A.torso, pick(A.cloth)); torso.position.y = 1.15;
+            const head = new THREE.Mesh(A.head, pick(A.skin)); head.position.y = 1.72;
+            const mkLimb = (geo, mat, x, y) => { const pv = new THREE.Group(); pv.position.set(x, y, 0); const m = new THREE.Mesh(geo, mat); m.position.y = -geo.parameters.height / 2 + 0.05; pv.add(m); g.add(pv); return pv; };
+            const legL = mkLimb(A.limb, A.pants, -0.14, 0.8), legR = mkLimb(A.limb, A.pants, 0.14, 0.8);
+            const armL = mkLimb(A.arm, torso.material, -0.34, 1.45), armR = mkLimb(A.arm, torso.material, 0.34, 1.45);
+            g.add(torso, head);
+            g.userData = { legL, legR, armL, armR };
+            return g;
+        }
+        function spawnCityVehicle(laneIndex, zPos, stationary) {
+            const oncoming = Math.random() < 0.55;
+            const car = buildCar(oncoming);
+            car.userData = { type: 'car', width: 2.1, height: 1.55, length: 4.7,
+                speed: stationary ? 0 : (oncoming ? 5 + currentLevel * 0.9 : -(5 + Math.random() * 3)) };
+            if (!stationary && oncoming && gameActive && Math.random() < 0.4) playSound('busHorn');
+            car.traverse(o => { if (o.isMesh) o.castShadow = Q().shadows && !!o.userData.cast; });
+            car.position.set(LANES[laneIndex], 0, zPos);
+            scene.add(car); obstacles.push(car);
+        }
+        function spawnPedestrian(laneIndex, zPos) {
+            const ped = buildPedestrian(), fromLeft = Math.random() < 0.5;
+            const u = ped.userData;
+            ped.position.set(fromLeft ? -6.9 : 6.9, 0, zPos);
+            ped.rotation.y = fromLeft ? Math.PI / 2 : -Math.PI / 2;
+            ped.scale.setScalar(1.05);
+            Object.assign(u, { type: 'ped', width: 0.8, height: 1.9, length: 0.8, speed: 0, targetX: LANES[laneIndex], walking: false, vx: 0, ph: Math.random() * 6 });
+            scene.add(ped); obstacles.push(ped);
+        }
+        function spawnJam(zSpawn) {
+            const free = Math.floor(Math.random() * 3);
+            for (let l = 0; l < 3; l++) {
+                if (l === free) continue;
+                const n = 2 + Math.floor(Math.random() * 2);
+                for (let i = 0; i < n; i++) spawnCityVehicle(l, zSpawn - i * 8 - Math.random() * 1.5, true);
+            }
+            for (let c = 0; c < 8; c++) spawnCoin(free, 1.05, zSpawn + 6 - c * 3.0);
+            if (gameActive) { playSound('busHorn'); showEvent('ازدحام مروري 🚗🚕', 1.6); }
+        }
+
         function buildTrain(v, moving) {
             const g = new THREE.Group();
             const body = new THREE.Mesh(SG.trainBody, v.bodyMat); body.position.y = 1.75; body.userData.cast = true;
@@ -3227,6 +3329,8 @@
 
         function spawnWave() {
             const zSpawn = -115;
+            const isCity = (playerState.mapType || 'railway') === 'city';
+            if (isCity && currentLevel >= 2 && Math.random() < 0.16) { spawnJam(zSpawn); return; }
             const laneIndices = [0, 1, 2].sort(() => Math.random() - 0.5);
             const numObstacles = (currentLevel === 1 && Math.random() < 0.65) ? 1 : (Math.random() < 0.55 ? 1 : 2);
 
@@ -3236,10 +3340,17 @@
                 occupiedLanes.push(lane);
                 const r = Math.random();
                 let obsType = 'low_barrier';
-                if (r > 0.68) obsType = 'train';
+                if (isCity) {
+                    if (r > 0.82) obsType = 'train';
+                    else if (r > 0.58) obsType = 'car';
+                    else if (r > 0.4 && currentLevel >= 2) obsType = 'ped';
+                    else if (r > 0.22) obsType = 'high_barrier';
+                } else if (r > 0.68) obsType = 'train';
                 else if (r > 0.36) obsType = 'high_barrier';
 
-                createObstacleByType(obsType, lane, zSpawn);
+                if (obsType === 'car') spawnCityVehicle(lane, zSpawn, Math.random() < 0.3);
+                else if (obsType === 'ped') spawnPedestrian(lane, zSpawn);
+                else createObstacleByType(obsType, lane, zSpawn);
 
                 if (obsType === 'low_barrier' && Math.random() > 0.4) {
                     spawnCoin(lane, 2.3, zSpawn + 2.5);
@@ -3254,6 +3365,8 @@
                     for (let c = 0; c < 5; c++) spawnCoin(freeLane, 1.05, zSpawn + 6 - c * 3.0);
                 } else if (shieldTimer <= 0 && Math.random() < 0.35) {
                     spawnShieldPowerup(freeLane, zSpawn);
+                } else if (currentLevel >= 2 && Math.random() < 0.5) {
+                    spawnBoost(Math.random() < 0.5 ? 'magnet' : 'double', freeLane, zSpawn);
                 }
             }
         }
@@ -3611,6 +3724,8 @@
             rollTimer = 0;
             jumpBufferTimer = 0;
             shieldTimer = 0;
+            magnetTimer = 0; doubleTimer = 0; comboCount = 0;
+            trackCur.x = 0; trackCur.s = 0; trackKind = 'straight'; trackTgt.x = 0; trackTgt.s = 0; trackTimer = 7;
             spawnTimer = 0.8;
 
             playerMesh.position.set(0, 0, 0);
@@ -3851,7 +3966,8 @@
         function companionDisplayName() {
             return playerState.companionName || (playerState.companionGender === 'female' ? 'الصديقة' : 'الصديق');
         }
-        function companionZ() { return 1.9; }
+        let compZCur = 1.9, compPull = 0, lastCoinT = 0;
+        function companionZ() { return compZCur; }
 
         function rebuildCompanion() {
             if (!scene) return;
@@ -3874,7 +3990,7 @@
 
         function resetCompanion() {
             pathHistory.length = 0;
-            gameClock = 0;
+            gameClock = 0; compZCur = 1.9; compPull = 0; lastCoinT = 0;
             compState.x = -0.85; compState.vx = 0; compState.side = -0.85;
             if (companionMesh) { companionMesh.position.set(0, 0, companionZ()); companionMesh.rotation.set(0, 0, 0); }
         }
@@ -3895,6 +4011,11 @@
         function updateCompanion(dt, now, speedT) {
             if (!companionMesh) return;
             gameClock += dt;
+            // The companion drifts back as the score grows (more points = further ahead of the chase), and closes in when you stall or stumble
+            const idle = Math.max(0, gameClock - lastCoinT - 6);
+            compPull = Math.max(0, compPull - dt);
+            const zTarget = 1.9 + 2.0 * (1 - Math.exp(-score / 900)) - Math.min(1.1, idle * 0.2) - (compPull > 0 ? 1.0 : 0);
+            compZCur += (Math.max(1.3, zTarget) - compZCur) * Math.min(1, dt * 1.2);
             pathHistory.push({ t: gameClock, x: playerMesh.position.x, y: playerMesh.position.y, roll: isRolling });
             while (pathHistory.length > 2 && pathHistory[0].t < gameClock - 3) pathHistory.shift();
 
@@ -3984,6 +4105,54 @@
         // ==========================================
         let lastTime = performance.now();
         let runPhaseAcc = 0;
+        // ---- Track shape director: curves, climbs and descents
+        const trackCur = { x: 0, s: 0 }, trackTgt = { x: 0, s: 0 };
+        let trackTimer = 6, trackKind = 'straight', trackFlip = 1;
+        function showEvent(text, secs = 1.8) {
+            el('level-up-title').textContent = text;
+            const b = el('level-up-banner'); b.classList.remove('hidden'); b.classList.add('flex');
+            levelBannerTimer = secs;
+        }
+        function nextTrackSection(announce) {
+            const lv = Math.min(1, 0.45 + currentLevel * 0.15);
+            const kinds = ['straight', 'curve', 'curve', 'uphill', 'downhill', 'scurve', 'hilly'];
+            let k = kinds[Math.floor(Math.random() * kinds.length)];
+            if (!gameActive) k = Math.random() < 0.5 ? 'curve' : 'straight';
+            trackKind = k;
+            trackFlip = Math.random() < 0.5 ? -1 : 1;
+            trackTgt.x = 0; trackTgt.s = 0;
+            let label = '';
+            if (k === 'curve') { trackTgt.x = trackFlip * 0.0009 * lv; label = trackFlip > 0 ? 'منعطف يمين ↪' : 'منعطف يسار ↩'; }
+            else if (k === 'scurve') { trackTgt.x = trackFlip * 0.0008 * lv; label = 'منعطفات متعرجة'; }
+            else if (k === 'uphill') { trackTgt.s = 0.09 * lv; label = 'صعود ⬆'; }
+            else if (k === 'downhill') { trackTgt.s = -0.1 * lv; label = 'منحدر ⬇ — أسرع!'; }
+            else if (k === 'hilly') { trackTgt.s = 0.07 * lv; trackTgt.x = trackFlip * 0.0003 * lv; label = 'طريق وعر'; }
+            trackTimer = 6 + Math.random() * 7;
+            if (announce && label) showEvent(label, 1.5);
+        }
+        function updateTrackShape(dt) {
+            trackTimer -= dt;
+            if (trackKind === 'scurve' && trackTimer < 3 && trackTgt.x * trackFlip > 0) trackTgt.x = -trackTgt.x;
+            if (trackKind === 'hilly' && trackTimer < 3) trackTgt.s = -Math.abs(trackTgt.s);
+            if (trackTimer <= 0) nextTrackSection(gameActive);
+            const k = Math.min(1, dt * 0.55);
+            trackCur.x += (trackTgt.x - trackCur.x) * k;
+            trackCur.s += (trackTgt.s - trackCur.s) * k;
+            WORLD_BEND.value.set(trackCur.x, -trackCur.s, 0);
+        }
+        // Boosts & combo
+        let magnetTimer = 0, doubleTimer = 0, comboCount = 0;
+        function scoreMul() { return doubleTimer > 0 ? 2 : 1; }
+        function addScore(v) { score += v * scoreMul(); }
+        function refreshBoostBadge() {
+            const b = el('hud-boost');
+            if (!b) return;
+            const parts = [];
+            if (magnetTimer > 0) parts.push(`🧲 ${Math.ceil(magnetTimer)}s`);
+            if (doubleTimer > 0) parts.push(`×2 ${Math.ceil(doubleTimer)}s`);
+            b.textContent = parts.join('  ');
+            b.classList.toggle('hidden', parts.length === 0);
+        }
         const lateral = { x: 0, v: 0, bank: 0 };
 
         // Biomechanical run cycle. phase = left-leg phase (right leg is phase + PI).
@@ -4118,6 +4287,7 @@
             // 1b. Living background behind the menu: the world keeps gliding by slowly
             if (menuOpen && scene) {
                 scrollWorld(7 * dt);
+                updateTrackShape(dt);
                 if (playerMesh) playerMesh.visible = false;
                 if (contactShadow) contactShadow.visible = false;
                 if (companionMesh) companionMesh.visible = false;
@@ -4132,7 +4302,7 @@
             if (gameActive && !gamePaused) {
                 updateCharacterFace(playerMesh, dt, now);
 
-                score += (10 + gameSpeed * 0.45) * dt;
+                addScore((10 + gameSpeed * 0.45) * dt);
                 el('hud-score').textContent = Math.floor(score);
 
                 const calculatedLevel = Math.floor(score / POINTS_PER_LEVEL) + 1;
@@ -4271,6 +4441,12 @@
                     ud.neckTie.rotation.z = Math.sin(runPhase) * 0.12 - dx * 0.18;
                 }
 
+                // Road shape, boosts
+                updateTrackShape(dt);
+                playerMesh.rotation.z = lateral.bank - trackCur.x * 260;
+                if (magnetTimer > 0) magnetTimer -= dt;
+                if (doubleTimer > 0) doubleTimer -= dt;
+                refreshBoostBadge();
                 // Move the world
                 scrollWorld(gameSpeed * dt);
 
@@ -4290,19 +4466,37 @@
                 for (let i = obstacles.length - 1; i >= 0; i--) {
                     const obs = obstacles[i];
                     obs.position.z += (gameSpeed + (obs.userData.speed || 0)) * dt;
+                    const od = obs.userData;
+                    if (od.type === 'ped') {
+                        if (!od.walking && obs.position.z > -gameSpeed * 2.4) {
+                            od.walking = true;
+                            const tt = Math.max(0.6, -obs.position.z / Math.max(8, gameSpeed + od.speed));
+                            od.vx = THREE.MathUtils.clamp((od.targetX - obs.position.x) / tt, -4.6, 4.6);
+                            if (Math.abs(od.vx) < 1.2) od.vx = od.vx < 0 ? -1.2 : 1.2;
+                            obs.rotation.y = od.vx > 0 ? Math.PI / 2 : -Math.PI / 2;
+                        }
+                        if (od.walking) {
+                            obs.position.x += od.vx * dt;
+                            od.ph += dt * 9;
+                            od.legL.rotation.x = Math.sin(od.ph) * 0.8; od.legR.rotation.x = -Math.sin(od.ph) * 0.8;
+                            od.armL.rotation.x = -Math.sin(od.ph) * 0.6; od.armR.rotation.x = Math.sin(od.ph) * 0.6;
+                            obs.position.y = Math.abs(Math.sin(od.ph)) * 0.05;
+                        }
+                    }
 
                     const halfLen = obs.userData.length / 2 + 0.35;
                     const halfWid = obs.userData.width / 2 + 0.25;
 
                     if (Math.abs(obs.position.z) < halfLen && Math.abs(pX - obs.position.x) < halfWid) {
                         let hit = false;
-                        if (obs.userData.type === 'train') { if (pY < obs.userData.height - 0.3) hit = true; }
+                        if (obs.userData.type === 'train' || obs.userData.type === 'car') { if (pY < obs.userData.height - 0.3) hit = true; }
+                        else if (obs.userData.type === 'ped') { if (pY < obs.userData.height - 0.2) hit = true; }
                         else if (obs.userData.type === 'low_barrier') { if (pY < obs.userData.height - 0.15) hit = true; }
                         else if (obs.userData.type === 'high_barrier') { if (pY + pHeight > obs.userData.bottomClearance) hit = true; }
 
                         if (hit) {
                             if (shieldTimer > 0) {
-                                shieldTimer = 0;
+                                shieldTimer = 0; comboCount = 0; compPull = 3;
                                 playerMesh.userData.shieldMesh.visible = false;
                                 el('hud-powerup').classList.add('hidden');
                                 createBurstParticles(obs.position.clone().add(new THREE.Vector3(0, 1.5, 0)), 0x10b981, 18);
@@ -4316,10 +4510,18 @@
                                 triggerGameOver();
                                 break;
                             }
-                        }
+                        } else obs.userData.cleared = true;
+                    }
+                    if (obs.userData.cleared && !obs.userData.rewarded && obs.position.z > halfLen) {
+                        obs.userData.rewarded = true;
+                        comboCount++;
+                        const bonus = 10 * Math.min(comboCount, 6);
+                        addScore(bonus);
+                        showDhikrToast(`عبور ماهر +${bonus * scoreMul()}${comboCount >= 3 ? '  🔥×' + comboCount : ''}`);
+                        if (comboCount === 5 || comboCount % 10 === 0) sayDhikr('ما شاء الله', 300);
                     }
 
-                    if (obs.position.z > 20) {
+                    if (obs.position.z > 20 || (od.walking && Math.abs(obs.position.x) > 10)) {
                         scene.remove(obs);
                         obstacles.splice(i, 1);
                     }
@@ -4330,10 +4532,16 @@
                     const c = coinsList[i];
                     c.position.z += gameSpeed * dt;
                     c.rotation.y += dt * 4;
+                    if (magnetTimer > 0 && c.position.z > -26 && c.position.z < 3) {
+                        const mk = Math.min(1, dt * 7);
+                        c.position.x += (pX - c.position.x) * mk;
+                        c.position.y += (pY + 1.0 - c.position.y) * mk;
+                    }
 
                     if (Math.abs(c.position.z) < 1.1 && Math.abs(pX - c.position.x) < 1.1 && Math.abs((pY + 1.0) - c.position.y) < 1.4) {
                         runCoins++;
-                        score += 15;
+                        addScore(15);
+                        lastCoinT = gameClock;
                         el('hud-coins').textContent = runCoins;
                         el('hud-wallet-coins').textContent = playerState.totalCoins + runCoins;
                         playSound('coin');
@@ -4354,10 +4562,15 @@
                     p.rotation.x += dt * 2;
 
                     if (Math.abs(p.position.z) < 1.2 && Math.abs(pX - p.position.x) < 1.2) {
+                        const kind = p.userData.kind || 'shield';
+                        if (kind === 'magnet') { magnetTimer = 9; showEvent('مغناطيس العملات 🧲', 1.4); }
+                        else if (kind === 'double') { doubleTimer = 10; showEvent('نقاط مضاعفة ×2', 1.4); }
+                        else {
                         shieldTimer = 8;
                         const badge = el('hud-powerup');
                         badge.classList.remove('hidden');
                         badge.classList.add('flex');
+                        }
                         playSound('powerup');
                         sayDhikr('الحمد لله', 300);
                         haptic(40);
@@ -4380,7 +4593,7 @@
 
                 // Cinematic camera: speed-based FOV, running bob, impact shake
                 const speedT = THREE.MathUtils.clamp((gameSpeed - BASE_START_SPEED) / (MAX_SPEED - BASE_START_SPEED), 0, 1);
-                camera.fov = THREE.MathUtils.lerp(camera.fov, baseFov() + speedT * 10, Math.min(1, dt * 2));
+                camera.fov = THREE.MathUtils.lerp(camera.fov, baseFov() + speedT * 10 + Math.max(0, -trackCur.s) * 90, Math.min(1, dt * 2));
                 camera.updateProjectionMatrix();
                 camShake = Math.max(0, camShake - dt * 1.6);
                 const sx = (Math.random() - 0.5) * camShake, sy = (Math.random() - 0.5) * camShake;
