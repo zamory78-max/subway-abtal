@@ -660,11 +660,15 @@
             </div>
 
             <div id="revive-Low-msg" class="hidden text-xs font-bold text-rose-400 mb-3 bg-rose-950/50 border border-rose-500/30 rounded-xl py-2 px-3">
-                رصيد النقاط أو العملات غير كافٍ للمتابعة! اجمع المزيد في الجولة القادمة.
+                رصيدك قليل، لكن يمكنك المتابعة من نفس المكان بخصم بسيط من نقاطك.
             </div>
 
+            <button id="btn-revive-free" onclick="reviveFree()" class="hidden btn-arcade w-full py-3 px-4 mb-3 rounded-2xl bg-gradient-to-l from-emerald-500 to-teal-500 font-black text-sm flex items-center justify-between w-full">
+                <span>متابعة من نفس المكان</span>
+                <span id="revive-free-cost" class="bg-slate-950/60 px-3 py-1 rounded-xl text-xs">مجاناً</span>
+            </button>
             <button onclick="finalizeGameOver()" class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-rose-900/60 border border-white/10 text-slate-300 hover:text-white font-bold text-xs sm:text-sm transition">
-                إنهاء الجولة والبدء من الأول (حفظ العملات)
+                إنهاء الجولة (حفظ العملات)
             </button>
         </div>
     </div>
@@ -2459,12 +2463,12 @@
 
         // Progressive Level & Speed System (Starts slow & comfortable, increases per level)
         let currentLevel = 1;
-        const POINTS_PER_LEVEL = 250;
+        const POINTS_PER_LEVEL = 700;
         const BASE_START_SPEED = 13;
-        const SPEED_PER_LEVEL = 3.2;
+        const SPEED_PER_LEVEL = 2.0;
         let gameSpeed = BASE_START_SPEED;
         let targetLevelSpeed = BASE_START_SPEED;
-        const MAX_SPEED = 45;
+        const MAX_SPEED = 38;
         let levelBannerTimer = 0;
 
         // Player Movement Physics
@@ -3814,8 +3818,8 @@
         // REVIVE / CONTINUE MECHANISM BASED ON SCORE OR COINS
         // ==========================================
         function getReviveCosts() {
-            const coinCost = 20 * (reviveCount + 1);
-            const scoreCost = 500 * (reviveCount + 1);
+            const coinCost = 5 * (reviveCount + 1);
+            const scoreCost = 100 * (reviveCount + 1);
             return { coinCost, scoreCost };
         }
 
@@ -3853,6 +3857,9 @@
             btnCoins.classList.toggle('cursor-not-allowed', !canUseCoins);
 
             document.getElementById('revive-Low-msg').classList.toggle('hidden', canUseScore || canUseCoins);
+            const freeCost = Math.floor(currentScoreFloor * 0.2);
+            document.getElementById('revive-free-cost').textContent = freeCost > 0 ? `-${freeCost} نقطة` : 'مجاناً';
+            document.getElementById('btn-revive-free').classList.toggle('hidden', canUseScore || canUseCoins);
             document.getElementById('revive-screen').classList.remove('hidden');
         }
 
@@ -3867,6 +3874,8 @@
             }
 
             reviveCount++;
+            gameSpeed = Math.max(BASE_START_SPEED, gameSpeed * 0.8);
+            showEvent(reviveSpentText || 'تابعنا من نفس المكان', 2.6);
             shieldTimer = 4.0; // 4 seconds of protective shield
             playerMesh.userData.shieldMesh.visible = true;
 
@@ -3884,10 +3893,18 @@
             playSound('powerup');
         }
 
+        let reviveSpentText = '';
+        function reviveFree() {
+            const cost = Math.floor(score * 0.2);
+            score = Math.max(0, score - cost);
+            reviveSpentText = cost > 0 ? `تابعتَ بخصم ${cost} نقطة` : 'تابعتَ مجاناً';
+            clearNearbyObstaclesAndResume();
+        }
         function reviveWithScore() {
             const { scoreCost } = getReviveCosts();
             if (Math.floor(score) < scoreCost) return;
             score = Math.max(0, score - scoreCost);
+            reviveSpentText = `تابعتَ بخصم ${scoreCost} نقطة`;
             clearNearbyObstaclesAndResume();
         }
 
@@ -3895,6 +3912,7 @@
             const { coinCost } = getReviveCosts();
             const totalAvailable = playerState.totalCoins + runCoins;
             if (totalAvailable < coinCost) return;
+            reviveSpentText = `تابعتَ بخصم ${coinCost} عملة 🪙`;
 
             if (runCoins >= coinCost) {
                 runCoins -= coinCost;
